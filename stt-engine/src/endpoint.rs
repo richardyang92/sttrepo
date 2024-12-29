@@ -51,6 +51,9 @@ pub mod server {
         port: u16,
         channel_num: usize,
         channel_capacity: usize,
+        retry_max: usize,
+        retry_interval: usize,
+        read_timeout: usize,
     }
 
     pub enum ServerMessage {
@@ -172,10 +175,14 @@ pub mod server {
     struct TcpListenerExecutor {
         listener: Option<TcpListener>,
         channels: Arc<Vec<Arc<TcpStreamChannel>>>,
+        retry_max: usize,
+        retry_interval: usize,
+        read_timeout: usize,
     }
 
     impl TcpListenerExecutor {
-        fn build_from(listener: TcpListener, num: usize, capacity: usize) -> impl Future<Output = Self> {
+        fn build_from(listener: TcpListener, num: usize, capacity: usize,
+            retry_max: usize, retry_interval: usize, read_timeout: usize) -> impl Future<Output = Self> {
             let mut channels = Vec::new();
             async move {
                 for _ in 0..num {
@@ -187,6 +194,9 @@ pub mod server {
                 Self {
                     listener: Some(listener),
                     channels: Arc::new(channels),
+                    retry_max,
+                    retry_interval,
+                    read_timeout
                 }
             }
         }
@@ -205,13 +215,16 @@ pub mod server {
                                 if let Ok((stream, _)) = listener.accept().await {
                                     {
                                         let channels = self.channels.clone();
+                                        let retry_max = self.retry_max;
+                                        let retry_interval = self.retry_interval;
+                                        let read_timeout = self.read_timeout;
+                                        
                                         tokio::spawn(async move {
                                             let mut channel = None;
-                                            let max_attempts = 10; // 设置最大尝试次数
                                             let mut retrying_count = 0;
                                             loop {
-                                                if retrying_count >= max_attempts {
-                                                    eprintln!("Failed to select a channel after {} attempts", max_attempts);
+                                                if retrying_count >= retry_max {
+                                                    eprintln!("Failed to select a channel after {} attempts", retry_max);
                                                     break; // 达到最大尝试次数后退出循环
                                                 }
                                                 if let Some(ch) = channels.iter().find(|c| !c.is_selected()) {
@@ -221,7 +234,7 @@ pub mod server {
                                                 } else {
                                                     retrying_count += 1;
                                                     eprintln!("No channel available for selection, retrying count: {}", retrying_count);
-                                                    sleep(Duration::from_secs(2)).await; // 等待一段时间再尝试选择其他通道（例如，10毫秒）
+                                                    sleep(Duration::from_secs(retry_interval as u64)).await;
                                                 }
                                             }
                                             match channel {
@@ -236,7 +249,6 @@ pub mod server {
                                                     tokio::spawn(async move {
                                                         // println!("Reader start...");
                                                         let mut buf = [0; 1024];
-                                                        let timeout_duration = Duration::from_secs(2); // 设置超时时间为2秒
 
                                                         loop {
                                                             tokio::select! {
@@ -249,7 +261,7 @@ pub mod server {
                                                                     Ok(data) => channel.send(ServerMessage::DataReceived(data)).await,
                                                                     Err(e) => eprintln!("Error: {}", e),
                                                                 },
-                                                                _ = sleep(timeout_duration) => {
+                                                                _ = sleep(Duration::from_secs(read_timeout as u64)) => {
                                                                     println!("Timeout occurred");
                                                                     break;
                                                                 }
@@ -292,7 +304,11 @@ pub mod server {
             async move {
                 if let Ok(listener) = TcpListener::bind(addr).await {
                     let executor = TcpListenerExecutor::build_from(listener,
-                        config.channel_num, config.channel_capacity).await;
+                        config.channel_num,
+                        config.channel_capacity,
+                        config.retry_max,
+                        config.retry_interval,
+                        config.read_timeout).await;
                     Some(Self {
                         executor,
                     })
