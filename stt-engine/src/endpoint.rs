@@ -1,6 +1,4 @@
-use std::{future::Future, pin::Pin, sync::Arc};
-
-pub type PinedFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+use std::future::Future;
 
 pub trait Endpoint {
     type Config;
@@ -14,7 +12,7 @@ pub trait Executor {
     type Context;
     type Channel;
 
-    fn execute(&self, handle: impl Fn(Self::Context, Arc<Self::Channel>) -> PinedFuture) -> impl Future<Output = ()>;
+    fn execute(&self) -> impl Future<Output = ()>;
 }
 
 trait Channel {
@@ -40,7 +38,7 @@ pub mod server {
 
     use crate::sherpa::Sherpa;
 
-    use super::{Channel, Endpoint, Executor, PinedFuture, Sender};
+    use super::{Channel, Endpoint, Executor, Sender};
 
     pub(crate) const SHERPA_TOKENS: &str = "../sherpa/sherpa-models/tokens.txt";
     pub(crate) const SHERPA_ENCODER: &str = "../sherpa/sherpa-models/encoder-epoch-20-avg-1-chunk-16-left-128.onnx";
@@ -127,7 +125,9 @@ pub mod server {
                                         }).collect::<Vec<f32>>();
                                         match sherpa_proxy.transcribe(&sample) {
                                             Ok(result) => {
-                                                writer.write_all(format!("{}\n", &result).as_bytes()).await.unwrap();
+                                                if let Err(e) = writer.write_all(format!("{}\n", &result).as_bytes()).await {
+                                                    eprintln!("Error writing to stream: {}", e);
+                                                }
                                             },
                                             Err(e) => {
                                                 eprintln!("Error transcribing: {}", e);
@@ -171,40 +171,23 @@ pub mod server {
 
     struct TcpListenerExecutor {
         listener: Option<TcpListener>,
-        channels: Vec<Arc<TcpStreamChannel>>,
-    }
-    
-    impl From<TcpListener> for TcpListenerExecutor {
-        fn from(value: TcpListener) -> Self {
-            Self {
-                listener: Some(value),
-                channels: Vec::new(),
-            }
-        }
+        channels: Arc<Vec<Arc<TcpStreamChannel>>>,
     }
 
     impl TcpListenerExecutor {
-        async fn init_channels(&mut self, num: usize, capacity: usize) {
-            for _ in 0..num {
-                let mut channel = TcpStreamChannel::default();
-                channel.open(capacity).await;
-                self.channels.push(Arc::new(channel));
-            }
-        }
-
-        fn select_channel(&self) -> Option<Arc<TcpStreamChannel>> {
-            for channel in &self.channels {
-                if !channel.is_selected() {
-                    channel.select();
-                    return Some(Arc::clone(channel));
+        fn build_from(listener: TcpListener, num: usize, capacity: usize) -> impl Future<Output = Self> {
+            let mut channels = Vec::new();
+            async move {
+                for _ in 0..num {
+                    let mut channel = TcpStreamChannel::default();
+                    channel.open(capacity).await;
+                    channels.push(Arc::new(channel));
                 }
-            }
-            None
-        }
-
-        async fn close_channels(&self) {
-            for channel in &self.channels {
-                channel.send(ServerMessage::CloseChannel).await;
+    
+                Self {
+                    listener: Some(listener),
+                    channels: Arc::new(channels),
+                }
             }
         }
     }
@@ -213,15 +196,74 @@ pub mod server {
         type Context = TcpStream;
         type Channel = TcpStreamChannel;
     
-        fn execute(&self, handle: impl Fn(Self::Context, Arc<Self::Channel>) -> PinedFuture) -> impl Future<Output = ()> {
+        fn execute(&self) -> impl Future<Output = ()> {
             async move {
                 tokio::select! {
                     _ = async {
                         if let Some(listener) = &self.listener {
                             loop {
                                 if let Ok((stream, _)) = listener.accept().await {
-                                    if let Some(channel) = self.select_channel() {
-                                        handle(stream, channel.clone()).await;
+                                    {
+                                        let channels = self.channels.clone();
+                                        tokio::spawn(async move {
+                                            let mut channel = None;
+                                            let max_attempts = 10; // 设置最大尝试次数
+                                            let mut retrying_count = 0;
+                                            loop {
+                                                if retrying_count >= max_attempts {
+                                                    eprintln!("Failed to select a channel after {} attempts", max_attempts);
+                                                    break; // 达到最大尝试次数后退出循环
+                                                }
+                                                if let Some(ch) = channels.iter().find(|c| !c.is_selected()) {
+                                                    ch.select();
+                                                    channel.replace(Arc::clone(ch));
+                                                    break;
+                                                } else {
+                                                    retrying_count += 1;
+                                                    eprintln!("No channel available for selection, retrying count: {}", retrying_count);
+                                                    sleep(Duration::from_secs(2)).await; // 等待一段时间再尝试选择其他通道（例如，10毫秒）
+                                                }
+                                            }
+                                            match channel {
+                                                Some(channel) => {
+                                                    // handle(stream, channel.clone()).await;
+                                                    let channel = channel.clone();
+                                                    let addr = stream.peer_addr().unwrap();
+                                                    println!("Connected: {}", addr);
+                                                    let (mut reader, writer) = stream.into_split();
+                                                    channel.send(ServerMessage::Connected(writer)).await;
+
+                                                    tokio::spawn(async move {
+                                                        // println!("Reader start...");
+                                                        let mut buf = [0; 1024];
+                                                        let timeout_duration = Duration::from_secs(2); // 设置超时时间为2秒
+
+                                                        loop {
+                                                            tokio::select! {
+                                                                result = async {
+                                                                    match reader.read(&mut buf).await {
+                                                                        Ok(n) => Ok(buf[..n].to_vec()),
+                                                                        Err(_) => Err("Error reading from stream"),
+                                                                    }
+                                                                } => match result {
+                                                                    Ok(data) => channel.send(ServerMessage::DataReceived(data)).await,
+                                                                    Err(e) => eprintln!("Error: {}", e),
+                                                                },
+                                                                _ = sleep(timeout_duration) => {
+                                                                    println!("Timeout occurred");
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                        channel.send(ServerMessage::Disconnected).await;
+                                                    });
+                                                },
+                                                None => {
+                                                    eprintln!("No channel available, closed stream...");
+                                                    drop(stream);
+                                                },
+                                            }
+                                        });
                                     }
                                 }
                             }
@@ -230,7 +272,9 @@ pub mod server {
                     _ = ctrl_c() => {}
                 }
                 println!("\nServer is shutting down...");
-                self.close_channels().await;
+                for channel in self.channels.iter() {
+                    channel.send(ServerMessage::CloseChannel).await;
+                }
             }
         }
     }
@@ -247,8 +291,8 @@ pub mod server {
             let addr = format!("{}:{}", config.ip, config.port);
             async move {
                 if let Ok(listener) = TcpListener::bind(addr).await {
-                    let mut executor = TcpListenerExecutor::from(listener);
-                    executor.init_channels(config.channel_num, config.channel_capacity).await;
+                    let executor = TcpListenerExecutor::build_from(listener,
+                        config.channel_num, config.channel_capacity).await;
                     Some(Self {
                         executor,
                     })
@@ -260,40 +304,7 @@ pub mod server {
 
         fn run(&self) -> impl std::future::Future<Output = ()> {
             async move {
-                self.executor.execute(|stream, channel| {
-                    Box::pin(async move {
-                        let channel = channel.clone();
-                        let addr = stream.peer_addr().unwrap();
-                        println!("Connected: {}", addr);
-                        let (mut reader, writer) = stream.into_split();
-                        channel.send(ServerMessage::Connected(writer)).await;
-
-                        tokio::spawn(async move {
-                            // println!("Reader start...");
-                            let mut buf = [0; 1024];
-                            let timeout_duration = Duration::from_secs(5); // 设置超时时间为5秒
-
-                            loop {
-                                tokio::select! {
-                                    result = async {
-                                        match reader.read(&mut buf).await {
-                                            Ok(n) => Ok(buf[..n].to_vec()),
-                                            Err(_) => Err("Error reading from stream"),
-                                        }
-                                    } => match result {
-                                        Ok(data) => channel.send(ServerMessage::DataReceived(data)).await,
-                                        Err(e) => eprintln!("Error: {}", e),
-                                    },
-                                    _ = sleep(timeout_duration) => {
-                                        println!("Timeout occurred");
-                                        break;
-                                    }
-                                }
-                            }
-                            channel.send(ServerMessage::Disconnected).await;
-                        });
-                    })
-                }).await;
+                self.executor.execute().await;
             }
         }
     }

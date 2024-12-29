@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use stt_engine::{client, endpoint::{server::{Server, ServerConfig}, Endpoint}};
 
 #[tokio::main]
@@ -12,7 +10,7 @@ async fn main() {
     }
     match &*args[1] {
         "server" => {
-            let config = ServerConfig::new("127.0.0.1", 8888, 10, 20);
+            let config = ServerConfig::new("127.0.0.1", 8888, 2, 20);
             if let Some(server) = Server::init(config).await {
                 println!("Server started on 127.0.0.1:8888");
                 server.run().await;
@@ -20,11 +18,14 @@ async fn main() {
         }, 
         "client" => {
             let mut joints = Vec::new();
-            for i in 0..10 {
+            for i in 0..4 {
                 let joint = tokio::spawn(async move {
                     let wav_file = format!("./data/segment/split_part_{}.wav", i + 1);
                     println!("Sending file: {}", wav_file);
-                    client::run_with(wav_file).await.unwrap();
+                    if let Err(e) = client::run_with(wav_file).await {
+                        println!("Error: {}", e);
+                        return;
+                    }
                 });
                 joints.push(joint);
             }
