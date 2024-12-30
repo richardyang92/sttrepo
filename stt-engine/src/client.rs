@@ -49,7 +49,7 @@ pub async fn run_with(wav_file: String) -> Result<(), Box<dyn std::error::Error>
                                 }
                             },
                             _ = sleep(timeout_duration) => {
-                                println!("Timeout occurred");
+                                println!("Reading from server timeout occurred");
                                 break;
                             }
                         }

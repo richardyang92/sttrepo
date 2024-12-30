@@ -122,18 +122,23 @@ pub mod server {
                                 },
                                 ServerMessage::DataReceived(data) => {
                                     if let Some(writer) = &mut onwed_writer {
-                                        // data两两一组，每组数据转成f32，然后把这些f32数据收集起来组成一个Vec<f32>
-                                        let sample = data.chunks(2).map(|chunk| {
-                                            ((chunk[1] as i16) << 8 | (chunk[0] as i16) & 0xff) as f32 / 32767f32
-                                        }).collect::<Vec<f32>>();
-                                        match sherpa_proxy.transcribe(&sample) {
-                                            Ok(result) => {
-                                                if let Err(e) = writer.write_all(format!("{}\n", &result).as_bytes()).await {
-                                                    eprintln!("Error writing to stream: {}", e);
+                                        if data.len() < 2 {
+                                            eprintln!("Invalid data length: {}", data.len());
+                                            continue;
+                                        } else {
+                                            // data两两一组，每组数据转成f32，然后把这些f32数据收集起来组成一个Vec<f32>
+                                            let sample = data.chunks(2).map(|chunk| {
+                                                ((chunk[1] as i16) << 8 | (chunk[0] as i16) & 0xff) as f32 / 32767f32
+                                            }).collect::<Vec<f32>>();
+                                            match sherpa_proxy.transcribe(&sample) {
+                                                Ok(result) => {
+                                                    if let Err(e) = writer.write_all(format!("{}\n", &result).as_bytes()).await {
+                                                        eprintln!("Error writing to stream: {}", e);
+                                                    }
+                                                },
+                                                Err(e) => {
+                                                    eprintln!("Error transcribing: {}", e);
                                                 }
-                                            },
-                                            Err(e) => {
-                                                eprintln!("Error transcribing: {}", e);
                                             }
                                         }
                                     }
@@ -254,15 +259,24 @@ pub mod server {
                                                             tokio::select! {
                                                                 result = async {
                                                                     match reader.read(&mut buf).await {
-                                                                        Ok(n) => Ok(buf[..n].to_vec()),
-                                                                        Err(_) => Err("Error reading from stream"),
+                                                                        Ok(n) => {
+                                                                            if n == 0 {
+                                                                                Err("End of stream")
+                                                                            } else {
+                                                                                Ok(buf[..n].to_vec())
+                                                                            }
+                                                                        },
+                                                                        Err(_) => Err("Reading from stream failed"),
                                                                     }
                                                                 } => match result {
                                                                     Ok(data) => channel.send(ServerMessage::DataReceived(data)).await,
-                                                                    Err(e) => eprintln!("Error: {}", e),
+                                                                    Err(e) => {
+                                                                        eprintln!("Error: {}", e);
+                                                                        break;
+                                                                    },
                                                                 },
                                                                 _ = sleep(Duration::from_secs(read_timeout as u64)) => {
-                                                                    println!("Timeout occurred");
+                                                                    println!("Reading from client timeout occurred");
                                                                     break;
                                                                 }
                                                             }
