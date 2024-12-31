@@ -72,7 +72,7 @@ cmake \
  ```
 ## 3. Running stt-engine
 ### 3.1 Downloading models
-We need download models from [sherpa-onnx models](https://github.com/k2-fsa/sherpa-onnx) repo before we can run stt-engine. By running following command to download models:
+We need download models from [sherpa-onnx models](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/online-transducer/zipformer-transducer-models.html#sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12-chinese) repo before we can run stt-engine. By running following command to download models:
 ```
 cd ${workspace_folder}/sherpa/sherpa-models
 wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12.tar.bz2
