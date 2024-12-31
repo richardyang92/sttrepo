@@ -71,7 +71,17 @@ cmake \
  make clean & make
  ```
 ## 3. Running stt-engine
-### 3.1 Running rust build
+### 3.1 Downloading models
+We need download models from [sherpa-onnx models](https://github.com/k2-fsa/sherpa-onnx) repo before we can run stt-engine. By running following command to download models:
+```
+cd ${workspace_folder}/sherpa/sherpa-models
+wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12.tar.bz2
+
+tar xf sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12.tar.bz2
+rm sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12.tar.bz2
+ls -lh sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12
+```
+### 3.2 Running rust build
 Executing following command to run stt-engine:
 1. run as server
 ```
@@ -83,7 +93,7 @@ cargo run server
 cd ${workspace_folder}/sherpa/stt-engine
 cargo run client
 ```
-### 3.2 Running c++ build
+### 3.3 Running c++ build
 Executing following command to run stt-engine:
 ```
 cd ${workspace_folder}/sherpa/stt-c-api
