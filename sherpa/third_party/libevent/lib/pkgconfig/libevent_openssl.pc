@@ -1,0 +1,16 @@
+#libevent pkg-config source file
+
+prefix=/Users/yangyang/Projects/sttrepo/sherpa/third_party/libevent
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libevent_openssl
+Description: libevent_openssl adds openssl-based TLS support to libevent
+Version: 2.1.11-stable
+Requires: libevent
+Conflicts:
+Libs: -L${libdir} -levent_openssl
+Libs.private:  -L/opt/homebrew/Cellar/openssl@3/3.4.0/lib -lssl -lcrypto   
+Cflags: -I${includedir} -I/opt/homebrew/Cellar/openssl@3/3.4.0/include
+

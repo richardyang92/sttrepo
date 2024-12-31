@@ -4,5 +4,6 @@
 ROOT=$(pwd)
 
 # 修正环境变量的导出语法
-export PKG_CONFIG_PATH=${ROOT}/sherpa/sherpa-native/shared:$PKG_CONFIG_PATH
+export PKG_CONFIG_PATH=${ROOT}/sherpa/third_party/sherpa-onnx:$PKG_CONFIG_PATH
+export PKG_CONFIG_PATH=${ROOT}/sherpa/third_party/libevent/lib/pkgconfig:$PKG_CONFIG_PATH
 export DYLD_LIBRARY_PATH=${ROOT}/stt-engine/lib:$DYLD_LIBRARY_PATH
