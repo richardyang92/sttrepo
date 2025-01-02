@@ -1,28 +1,54 @@
 use std::{io::Read, time::Duration};
+use derive_new::new;
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, time::sleep};
 
-pub async fn run_with(wav_file: String) -> Result<(), Box<dyn std::error::Error>> {
+#[derive(Debug, Clone, new)]
+pub struct RunningRecord {
+    _connect_result: bool,
+    _error_occurred: bool,
+    _readfile_time: usize,
+    _connecting_time: usize,
+    _sending_time: usize,
+    _receiving_time: usize,
+}
+
+unsafe impl Send for RunningRecord {}
+unsafe impl Sync for RunningRecord {}
+
+pub async fn run_with(wav_file: String) -> Result<RunningRecord, Box<dyn std::error::Error>> {
     // 读取WAV文件
+    let start_time = std::time::Instant::now();
     let mut file = std::fs::File::open(wav_file.clone())?;
     let mut data = Vec::new();
     file.read_to_end(&mut data).unwrap();
-
+    let readfile_time = start_time.elapsed().as_micros() as usize;
     println!("Connecting...");
 
     // 连接到服务器
     tokio::select! {
         stream = async move {
-            TcpStream::connect("127.0.0.1:8888").await
+            let start_time = std::time::Instant::now();
+            match TcpStream::connect("127.0.0.1:8888").await {
+                Ok(stream) => {
+                    let connecting_time = start_time.elapsed().as_micros() as usize;
+                    Ok((stream, connecting_time))
+                },
+                Err(_) => Err("Failed to connect"),
+            }
         } => {
             match stream {
-                Ok(mut stream) => {
+                Ok((mut stream, connecting_time)) => {
                     // 发送WAV文件数据
+                    let mut start_time = std::time::Instant::now();
                     stream.write_all(&data).await?;
+                    let sending_time = start_time.elapsed().as_micros() as usize;
 
                     // 读取服务器响应，直到连接关闭
                     let mut buf = [0; 1024];
-                    let timeout_duration = Duration::from_secs(5); // 设置超时时间为5秒
+                    let timeout_duration = Duration::from_secs(2); // 设置超时时间为2秒
 
+                    let mut _error_occurred = false;
+                    start_time = std::time::Instant::now();
                     loop {
                         tokio::select! {
                             result = async {
@@ -34,7 +60,10 @@ pub async fn run_with(wav_file: String) -> Result<(), Box<dyn std::error::Error>
                                         }
                                         Some(String::from_utf8_lossy(&buf[..n]).to_string())
                                     },
-                                    Err(_) => Some("Error reading from the socket".to_string()),
+                                    Err(_) => {
+                                        _error_occurred = true;
+                                        return None; // 读取错误，返回None
+                                    },
                                 }
                             } => {
                                 if let Some(result) = result {
@@ -54,15 +83,16 @@ pub async fn run_with(wav_file: String) -> Result<(), Box<dyn std::error::Error>
                             }
                         }
                     }
+                    let receiving_time = start_time.elapsed().as_micros() as usize;
                     // 主动关闭连接
                     stream.shutdown().await?;
 
                     println!("Connection closed.");
+                    Ok(RunningRecord::new(true, _error_occurred, readfile_time, connecting_time, sending_time, receiving_time))
                 }, // 连接成功，直接返回
-                Err(_) => println!("Failed to connect"),
+                Err(_) => Err("Failed to connect".into()), // 连接失败，返回错误
             }
         },
-        _ = sleep(Duration::from_secs(20)) => println!("Connection timed out"), // 尝试连接时长最多不超20s，超过后服务端会断开连接
+        _ = sleep(Duration::from_secs(20)) => Err("Connecting timeout".into()), // 尝试连接时长最多不超20s，超过后服务端会断开连接
     }
-    Ok(())
 }
