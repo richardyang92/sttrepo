@@ -1,4 +1,4 @@
-use stt_engine::{client, endpoint::{server::{Server, ServerConfig}, Endpoint}};
+use stt_engine::{benchmark, client, endpoint::{server::{Server, ServerConfig}, Endpoint}};
 
 #[tokio::main]
 // 主函数，解析参数如果是server则启动服务端，如果是client则启动客户端
@@ -10,7 +10,7 @@ async fn main() {
     }
     match &*args[1] {
         "server" => {
-            let config = ServerConfig::new("127.0.0.1", 8888, 2, 20, 2, 2, 2);
+            let config = ServerConfig::new("127.0.0.1", 8888, 5, 20, 2, 2, 2);
             if let Some(server) = Server::init(config).await {
                 println!("Server started on 127.0.0.1:8888");
                 server.run().await;
@@ -37,6 +37,9 @@ async fn main() {
             for joint in joints {
                 joint.await.unwrap();
             }
+        },
+        "benchmark" => {
+            benchmark::run_benchmark().await;
         },
         _ => {
             println!("Unknown command: {}", &args[1]);
