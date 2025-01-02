@@ -6,52 +6,88 @@
 #include <event2/buffer.h>
 #include <event2/event.h>
 #include <functional>
-#include <memory>
+extern "C" {
+    #include <sherpa.h>
+}
 
-class Server;
-struct EventHandler;
+namespace server {
+    namespace sherpa {
+        class SherpaHandleWrapper {
+        private:
+            // 定义一个智能指针类型，指向sherpa_handle
+            std::shared_ptr<SherpaHandle> handle;
+            // 定义一个线程安全的bool类型，用于标记handle是否在使用中
+            std::shared_ptr<std::atomic<bool>> inUse;
+        public:
+            SherpaHandleWrapper(std::shared_ptr<SherpaHandle> handle, std::shared_ptr<std::atomic<bool>> inUse);
+            ~SherpaHandleWrapper();
+            // 定义一个函数，用于获取Sherpa句柄
+            SherpaHandle getHandle() const;
+            // 定义一个函数，用于设置inUse的值
+            void setInUse(bool value) const;
+            // 定义一个函数，用于判断handle是否在使用中
+            bool isInUse() const;
+        };
+        
+        class SherpaPool {
+        private:
+            int total_size;
+            std::vector<SherpaHandleWrapper> handles;
+        public:
+            SherpaPool(int total_size);
+            ~SherpaPool();
+            SherpaHandleWrapper *selectHandle();
+            void releaseHandle(SherpaHandleWrapper *handle);
+        };
+    };
 
-class ServerBuilder {
-public:
-    ServerBuilder& setPort(int port);
-    ServerBuilder& setAcceptCallback(const std::function<void(struct evconnlistener*, evutil_socket_t, struct sockaddr*, int, void*)>& acceptCb);
-    ServerBuilder& setErrorCallback(const std::function<void(struct evconnlistener*, void*)>& errorCb);
-    ServerBuilder& setEventHandler(std::unique_ptr<EventHandler> eventHandler);
-    std::unique_ptr<Server> build();
+    class Server;
 
-private:
-    friend class Server; // 允许Server访问ServerBuilder的私有成员
+    class ServerBuilder {
+    public:
+        ServerBuilder& setPort(int port);
+        ServerBuilder& setAcceptCallback(const std::function<void(struct evconnlistener*, evutil_socket_t, struct sockaddr*, int, void*)>& acceptCb);
+        ServerBuilder& setErrorCallback(const std::function<void(struct evconnlistener*, void*)>& errorCb);
+        std::unique_ptr<Server> build();
 
-    int port_;
-    std::function<void(struct evconnlistener*, evutil_socket_t, struct sockaddr*, int, void*)> acceptCb_;
-    std::function<void(struct evconnlistener*, void*)> errorCb_;
-    std::unique_ptr<EventHandler> eventHandler_;
-};
+    private:
+        friend class Server; // 允许Server访问ServerBuilder的私有成员
 
-class Server {
-public:
-    using AcceptCallback = std::function<void(struct evconnlistener*, evutil_socket_t, struct sockaddr*, int, void*)>;
-    using ErrorCallback = std::function<void(struct evconnlistener*, void*)>;
+        int port_;
+        std::function<void(struct evconnlistener*, evutil_socket_t, struct sockaddr*, int, void*)> acceptCb_;
+        std::function<void(struct evconnlistener*, void*)> errorCb_;
+    };
 
-    Server(int port, AcceptCallback acceptCb = nullptr, ErrorCallback errorCb = nullptr, EventHandler *eventHandler = nullptr);
-    ~Server();
-    void start();
+    class Server {
+    public:
+        using AcceptCallback = std::function<void(struct evconnlistener*, evutil_socket_t, struct sockaddr*, int, void*)>;
+        using ErrorCallback = std::function<void(struct evconnlistener*, void*)>;
 
-private:
-    void handleAccept(struct evconnlistener *listener, evutil_socket_t fd, struct sockaddr *address, int socklen);
-    void handleError(struct evconnlistener *listener);
+        Server(int port, AcceptCallback acceptCb = nullptr, ErrorCallback errorCb = nullptr);
+        ~Server();
+        void start();
 
-    int port_;
-    struct event_base *base_;
-    struct evconnlistener *listener_;
-    AcceptCallback acceptCb_;
-    ErrorCallback errorCb_;
-    struct EventHandler *eventHandler_;
-};
+    private:
+        void handleAccept(struct evconnlistener *listener, evutil_socket_t fd, struct sockaddr *address, int socklen);
+        void handleError(struct evconnlistener *listener);
 
-struct EventHandler {
-    void (*read_cb) (struct bufferevent *bev, void *);
-    void (*event_cb) (struct bufferevent *, short, void *);
+        int port_;
+        struct event_base *base_;
+        struct evconnlistener *listener_;
+        AcceptCallback acceptCb_;
+        ErrorCallback errorCb_;
+    };
+
+    struct Connection {
+        int connectionId;
+        sherpa::SherpaHandleWrapper *sherpaWrapper;
+        std::unique_ptr<float[]> samples;
+        Connection(int id, sherpa::SherpaHandleWrapper *wrapper) {
+            connectionId = id;
+            sherpaWrapper = wrapper;
+            samples = std::make_unique<float[]>(4096);
+        }
+    };
 };
 
 #endif // SERVER_H

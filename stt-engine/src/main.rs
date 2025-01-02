@@ -18,7 +18,7 @@ async fn main() {
         }, 
         "client" => {
             let mut joints = Vec::new();
-            for i in 0..4 {
+            for i in 0..20 {
                 let joint = tokio::spawn(async move {
                     let wav_file = format!("./data/segment/split_part_{}.wav", i + 1);
                     println!("Sending file: {}", wav_file);
