@@ -10,7 +10,7 @@ async fn main() {
     }
     match &*args[1] {
         "server" => {
-            let config = ServerConfig::new("127.0.0.1", 8888, 2, 20, 10, 2, 2);
+            let config = ServerConfig::new("127.0.0.1", 8888, 2, 20, 2, 2, 2);
             if let Some(server) = Server::init(config).await {
                 println!("Server started on 127.0.0.1:8888");
                 server.run().await;
