@@ -20,11 +20,11 @@ SherpaHandle server::sherpa::SherpaHandleWrapper::getHandle() const {
 }
 
 void server::sherpa::SherpaHandleWrapper::setInUse(bool value) const {
-    *inUse = value;
+    inUse->store(value);
 }
 
 bool server::sherpa::SherpaHandleWrapper::isInUse() const {
-    return *inUse;
+    return inUse->load();
 }
 
 // 实现SherpaPool中的函数

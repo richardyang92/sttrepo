@@ -4,13 +4,13 @@ use tokio::{signal::ctrl_c, sync::mpsc, task::JoinHandle};
 
 use crate::client;
 
-pub async fn run_benchmark() {
+pub async fn run_benchmark(ip: String, port: u16, max_clients: usize) {
     tokio::select! {
         _ = async move {
-            let (tx, mut rx) = mpsc::channel::<JoinHandle<()>>(10);
+            let (tx, mut rx) = mpsc::channel::<JoinHandle<()>>(max_clients);
             tokio::spawn(async move {
                 let handles: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
-                let max_support = 10;
+                let max_support = max_clients;
                 while let Some(handle) = rx.recv().await {
                     // println!("Received handle");
                     match handles.lock() {
@@ -36,8 +36,9 @@ pub async fn run_benchmark() {
                 if i > 100 {
                     i = 1;
                 }
+                let ip = ip.clone();
                 let handle = tokio::spawn(async move {
-                    match client::run_with(wav_file, false).await {
+                    match client::run_with(ip, port, wav_file, false).await {
                         Ok(res) => {
                             println!("Received response: {:?}", res);
                         },

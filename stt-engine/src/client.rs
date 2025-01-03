@@ -16,7 +16,7 @@ pub struct RunningRecord {
 unsafe impl Send for RunningRecord {}
 unsafe impl Sync for RunningRecord {}
 
-pub async fn run_with(wav_file: String, debug: bool) -> Result<RunningRecord, Box<dyn std::error::Error>> {
+pub async fn run_with(ip: String, port: u16, wav_file: String, debug: bool) -> Result<RunningRecord, Box<dyn std::error::Error>> {
     // 读取WAV文件
     let start_time = std::time::Instant::now();
     let mut file = std::fs::File::open(wav_file.clone())?;
@@ -31,7 +31,7 @@ pub async fn run_with(wav_file: String, debug: bool) -> Result<RunningRecord, Bo
     tokio::select! {
         stream = async move {
             let start_time = std::time::Instant::now();
-            match TcpStream::connect("127.0.0.1:8888").await {
+            match TcpStream::connect(format!("{}:{}", ip, port)).await {
                 Ok(stream) => {
                     let connecting_time = start_time.elapsed().as_micros() as usize;
                     Ok((stream, connecting_time))

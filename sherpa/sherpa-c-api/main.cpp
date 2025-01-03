@@ -44,20 +44,25 @@ sherpa_read_cb(struct bufferevent *bev, void *ctx) {
         evbuffer_remove(input, buff.get(), len);
 
         // 处理数据
-        for (int k = 0; k < len / 2; k++) {
+        for (size_t k = 0; k < len / 2; k++) {
             int16_t value = ((int16_t)buff[2 * k + 1] << 8) | ((int16_t)buff[2 * k] & 0xff);
             samples[k] = static_cast<float>(value) / 32767.0f;
         }
         
         sherpa_transcribe(handler->getHandle(), result.get(), samples, len / 2);
         // samples使用完后要重置
-        for (int k = 0; k < len / 2; k++) {
+        for (size_t k = 0; k < len / 2; k++) {
             samples[k] = 0.0f;
         }
-        // 注意：这里修改了 result 指向的内存，确保不会超出分配的范围
-        strcat(result.get(), "\n");
-        printf("sherpa_read_cb ClientId(%d): %s\n", connection->connectionId, result.get());
-        evbuffer_add(output, result.get(), strlen(result.get()));
+        // 如果 result的内容是空，则不发送
+        if (strlen(result.get()) == 0) {
+            return;
+        } else {
+            // 注意：这里修改了 result 指向的内存，确保不会超出分配的范围
+            strcat(result.get(), "\n");
+            printf("sherpa_read_cb ClientId(%d): %s\n", connection->connectionId, result.get());
+            evbuffer_add(output, result.get(), strlen(result.get()));
+        }
     }
 }
 
@@ -107,13 +112,9 @@ accept_conn_cb(struct evconnlistener *listener,
         connection->sherpaWrapper = handler;
         printf("accept_conn_cb, connection id=%d\n", connection->connectionId);
         struct event_base *base = evconnlistener_get_base(listener);
-        printf("debug: 111\n");
         struct bufferevent *bev = bufferevent_socket_new(base, fd, BEV_OPT_CLOSE_ON_FREE);
-        printf("debug: 222\n");
         bufferevent_setcb(bev, sherpa_read_cb, nullptr, sherpa_event_cb, connection);
-        printf("debug: 333\n");
         bufferevent_enable(bev, EV_READ | EV_WRITE);
-        printf("debug: 444\n");
     }
 }
 

@@ -6,6 +6,10 @@
 #include <event2/buffer.h>
 #include <event2/event.h>
 #include <functional>
+#include <memory>
+#include <atomic>
+#include <vector>
+#include <cstring>
 extern "C" {
     #include <sherpa.h>
 }
