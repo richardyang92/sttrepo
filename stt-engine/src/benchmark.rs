@@ -10,9 +10,9 @@ pub async fn run_benchmark() {
             let (tx, mut rx) = mpsc::channel::<JoinHandle<()>>(10);
             tokio::spawn(async move {
                 let handles: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
-                let max_support = 5;
+                let max_support = 10;
                 while let Some(handle) = rx.recv().await {
-                    println!("Received handle");
+                    // println!("Received handle");
                     match handles.lock() {
                         Ok(mut handles) => {
                             // 如果handles长度max_support, 则等待其中一个完成
@@ -37,7 +37,7 @@ pub async fn run_benchmark() {
                     i = 1;
                 }
                 let handle = tokio::spawn(async move {
-                    match client::run_with(wav_file).await {
+                    match client::run_with(wav_file, false).await {
                         Ok(res) => {
                             println!("Received response: {:?}", res);
                         },

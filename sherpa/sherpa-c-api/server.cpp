@@ -124,6 +124,7 @@ void server::Server::handleError(struct evconnlistener *listener) {
         errorCb_(listener, nullptr);
     }
 
+    printf("Error occurred in the server\n");
     event_base_loopexit(base, nullptr);
 }
 

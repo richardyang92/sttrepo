@@ -22,7 +22,7 @@ async fn main() {
                 let joint = tokio::spawn(async move {
                     let wav_file = format!("./data/segment/split_part_{}.wav", i + 1);
                     println!("Sending file: {}", wav_file);
-                    match client::run_with(wav_file).await {
+                    match client::run_with(wav_file, true).await {
                         Ok(res) => {
                             println!("Received response: {:?}", res);
                         },

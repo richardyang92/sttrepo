@@ -16,14 +16,16 @@ pub struct RunningRecord {
 unsafe impl Send for RunningRecord {}
 unsafe impl Sync for RunningRecord {}
 
-pub async fn run_with(wav_file: String) -> Result<RunningRecord, Box<dyn std::error::Error>> {
+pub async fn run_with(wav_file: String, debug: bool) -> Result<RunningRecord, Box<dyn std::error::Error>> {
     // 读取WAV文件
     let start_time = std::time::Instant::now();
     let mut file = std::fs::File::open(wav_file.clone())?;
     let mut data = Vec::new();
     file.read_to_end(&mut data).unwrap();
     let readfile_time = start_time.elapsed().as_micros() as usize;
-    println!("Connecting...");
+    if debug {
+        println!("Connecting...");
+    }
 
     // 连接到服务器
     tokio::select! {
@@ -84,7 +86,9 @@ pub async fn run_with(wav_file: String) -> Result<RunningRecord, Box<dyn std::er
                                 }
                             },
                             _ = sleep(timeout_duration) => {
-                                println!("Reading from server timeout occurred");
+                                if debug {
+                                    println!("Reading from server timeout occurred");
+                                }
                                 break;
                             }
                         }
@@ -93,7 +97,9 @@ pub async fn run_with(wav_file: String) -> Result<RunningRecord, Box<dyn std::er
                     // 主动关闭连接
                     stream.shutdown().await?;
 
-                    println!("Connection closed.");
+                    if debug {
+                        println!("Connection closed.");
+                    }
                     Ok(RunningRecord::new(wav_file, _connect_result, _error_occurred, readfile_time, connecting_time, sending_time, receiving_time))
                 }, // 连接成功，直接返回
                 Err(_) => Ok(RunningRecord::new(wav_file, 4, true, 0, 0, 0, 0)), // 连接失败，返回错误
