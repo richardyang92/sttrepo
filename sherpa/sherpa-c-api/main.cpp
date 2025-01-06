@@ -3,7 +3,7 @@
 #include <unistd.h>
 #include <signal.h>
 
-#define SHERPA_POOL_SIZE 5
+#define SHERPA_POOL_SIZE 10
 
 static server::sherpa::SherpaPool gSherpaPool = server::sherpa::SherpaPool(SHERPA_POOL_SIZE);
 

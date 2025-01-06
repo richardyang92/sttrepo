@@ -15,7 +15,7 @@ pub async fn run_benchmark(ip: String, port: u16, max_clients: usize) {
                     // println!("Received handle");
                     match handles.lock() {
                         Ok(mut handles) => {
-                            // 如果handles长度max_support, 则等待其中一个完成
+                            // 如果handles长度max_support, 则等待handles中的任务完成后再添加新任务
                             while handles.len() >= max_support {
                                 for i in 0..handles.len() {
                                     if handles[i].is_finished() {
@@ -38,12 +38,11 @@ pub async fn run_benchmark(ip: String, port: u16, max_clients: usize) {
                 }
                 let ip = ip.clone();
                 let handle = tokio::spawn(async move {
-                    match client::run_with(ip, port, wav_file, false).await {
-                        Ok(res) => {
-                            println!("Received response: {:?}", res);
-                        },
-                        Err(e) => {
-                            println!("Error: {}", e);
+                    let start_time = std::time::Instant::now();
+                    if let Ok(result) = client::run_with(ip, port, wav_file.clone(), false).await {
+                        if result.clone().is_connect_success() {
+                            let duration = start_time.elapsed().as_secs();
+                            println!("Transcribe file {} spend {}s, result: {:?}", wav_file, duration, result);
                         }
                     }
                 });

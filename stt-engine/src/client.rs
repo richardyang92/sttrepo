@@ -11,6 +11,13 @@ pub struct RunningRecord {
     _connecting_time: usize,
     _sending_time: usize,
     _receiving_time: usize,
+    _transcribe_result: String,
+}
+
+impl RunningRecord {
+    pub fn is_connect_success(self) -> bool {
+        self._connect_result == 0
+    }
 }
 
 unsafe impl Send for RunningRecord {}
@@ -22,7 +29,7 @@ pub async fn run_with(ip: String, port: u16, wav_file: String, debug: bool) -> R
     let mut file = std::fs::File::open(wav_file.clone())?;
     let mut data = Vec::new();
     file.read_to_end(&mut data).unwrap();
-    let readfile_time = start_time.elapsed().as_micros() as usize;
+    let readfile_time = start_time.elapsed().as_nanos() as usize;
     if debug {
         println!("Connecting...");
     }
@@ -33,7 +40,7 @@ pub async fn run_with(ip: String, port: u16, wav_file: String, debug: bool) -> R
             let start_time = std::time::Instant::now();
             match TcpStream::connect(format!("{}:{}", ip, port)).await {
                 Ok(stream) => {
-                    let connecting_time = start_time.elapsed().as_micros() as usize;
+                    let connecting_time = start_time.elapsed().as_nanos() as usize;
                     Ok((stream, connecting_time))
                 },
                 Err(_) => Err("Failed to connect"),
@@ -44,15 +51,17 @@ pub async fn run_with(ip: String, port: u16, wav_file: String, debug: bool) -> R
                     // 发送WAV文件数据
                     let mut _error_occurred = false;
                     let mut _connect_result = 0;
+                    let mut _transcribe_result = "".to_string();
 
                     let mut start_time = std::time::Instant::now();
                     if let Err(_) = stream.write_all(&data).await {
-                        return Ok(RunningRecord::new(wav_file, 1, true, 0, 0, 0, 0));
+                        return Ok(RunningRecord::new(wav_file, 1, true, 0, 0, 0, 0, "".to_string()));
                     }
-                    let sending_time = start_time.elapsed().as_micros() as usize;
+
+                    let sending_time = start_time.elapsed().as_nanos() as usize;
 
                     // 读取服务器响应，直到连接关闭
-                    let mut buf = [0; 1024];
+                    let mut buf = [0; 4096];
                     let timeout_duration = Duration::from_secs(2); // 设置超时时间为2秒
                     start_time = std::time::Instant::now();
                     loop {
@@ -78,7 +87,10 @@ pub async fn run_with(ip: String, port: u16, wav_file: String, debug: bool) -> R
                                     // 以'\n'分割，打印每条消息
                                     for line in result.split('\n') {
                                         if !line.is_empty() {
-                                            println!("Received for {}: {}", wav_file, line);
+                                            if debug {
+                                                println!("Received for {}: {}", wav_file, line);
+                                            }
+                                            _transcribe_result = line.to_string();
                                         }
                                     }
                                 } else {
@@ -93,18 +105,18 @@ pub async fn run_with(ip: String, port: u16, wav_file: String, debug: bool) -> R
                             }
                         }
                     }
-                    let receiving_time = start_time.elapsed().as_micros() as usize;
+                    let receiving_time = start_time.elapsed().as_nanos() as usize;
                     // 主动关闭连接
                     stream.shutdown().await?;
 
                     if debug {
                         println!("Connection closed.");
                     }
-                    Ok(RunningRecord::new(wav_file, _connect_result, _error_occurred, readfile_time, connecting_time, sending_time, receiving_time))
+                    Ok(RunningRecord::new(wav_file, _connect_result, _error_occurred, readfile_time, connecting_time, sending_time, receiving_time, _transcribe_result))
                 }, // 连接成功，直接返回
-                Err(_) => Ok(RunningRecord::new(wav_file, 4, true, 0, 0, 0, 0)), // 连接失败，返回错误
+                Err(_) => Ok(RunningRecord::new(wav_file, 4, true, 0, 0, 0, 0, "".to_string())), // 连接失败，返回错误
             }
         },
-        _ = sleep(Duration::from_secs(20)) => Ok(RunningRecord::new(wav_file, 5, true, 0, 0, 0, 0)), // 尝试连接时长最多不超20s，超过后服务端会断开连接
+        _ = sleep(Duration::from_secs(20)) => Ok(RunningRecord::new(wav_file, 5, true, 0, 0, 0, 0, "".to_string())), // 尝试连接时长最多不超20s，超过后服务端会断开连接
     }
 }

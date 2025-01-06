@@ -51,6 +51,7 @@ pub mod server {
         port: u16,
         channel_num: usize,
         channel_capacity: usize,
+        retry_support: bool,
         retry_max: usize,
         retry_interval: usize,
         read_timeout: usize,
@@ -132,8 +133,12 @@ pub mod server {
                                             }).collect::<Vec<f32>>();
                                             match sherpa_proxy.transcribe(&sample) {
                                                 Ok(result) => {
-                                                    if let Err(e) = writer.write_all(format!("{}\n", &result).as_bytes()).await {
-                                                        eprintln!("Error writing to stream: {}", e);
+                                                    if result != "" {
+                                                        let result = format!("{}\n", result);
+                                                        println!("Transcribed: {}", result);
+                                                        if let Err(e) = writer.write_all(result.as_bytes()).await {
+                                                            eprintln!("Error writing to stream: {}", e);
+                                                        }
                                                     }
                                                 },
                                                 Err(e) => {
@@ -180,13 +185,14 @@ pub mod server {
     struct TcpListenerExecutor {
         listener: Option<TcpListener>,
         channels: Arc<Vec<Arc<TcpStreamChannel>>>,
+        retry_support: bool,
         retry_max: usize,
         retry_interval: usize,
         read_timeout: usize,
     }
 
     impl TcpListenerExecutor {
-        fn build_from(listener: TcpListener, num: usize, capacity: usize,
+        fn build_from(listener: TcpListener, num: usize, capacity: usize, retry_support: bool,
             retry_max: usize, retry_interval: usize, read_timeout: usize) -> impl Future<Output = Self> {
             let mut channels = Vec::new();
             async move {
@@ -199,6 +205,7 @@ pub mod server {
                 Self {
                     listener: Some(listener),
                     channels: Arc::new(channels),
+                    retry_support,
                     retry_max,
                     retry_interval,
                     read_timeout
@@ -220,26 +227,34 @@ pub mod server {
                                 if let Ok((stream, _)) = listener.accept().await {
                                     {
                                         let channels = self.channels.clone();
+                                        let retry_support = self.retry_support;
                                         let retry_max = self.retry_max;
                                         let retry_interval = self.retry_interval;
                                         let read_timeout = self.read_timeout;
                                         
                                         tokio::spawn(async move {
                                             let mut channel = None;
-                                            let mut retrying_count = 0;
-                                            loop {
-                                                if retrying_count >= retry_max {
-                                                    eprintln!("Failed to select a channel after {} attempts", retry_max);
-                                                    break; // 达到最大尝试次数后退出循环
+                                            if retry_support {
+                                                let mut retrying_count = 0;
+                                                loop {
+                                                    if retrying_count >= retry_max {
+                                                        eprintln!("Failed to select a channel after {} attempts", retry_max);
+                                                        break; // 达到最大尝试次数后退出循环
+                                                    }
+                                                    if let Some(ch) = channels.iter().find(|c| !c.is_selected()) {
+                                                        ch.select();
+                                                        channel.replace(Arc::clone(ch));
+                                                        break;
+                                                    } else {
+                                                        retrying_count += 1;
+                                                        eprintln!("No channel available for selection, retrying count: {}", retrying_count);
+                                                        sleep(Duration::from_secs(retry_interval as u64)).await;
+                                                    }
                                                 }
+                                            } else {
                                                 if let Some(ch) = channels.iter().find(|c| !c.is_selected()) {
                                                     ch.select();
                                                     channel.replace(Arc::clone(ch));
-                                                    break;
-                                                } else {
-                                                    retrying_count += 1;
-                                                    eprintln!("No channel available for selection, retrying count: {}", retrying_count);
-                                                    sleep(Duration::from_secs(retry_interval as u64)).await;
                                                 }
                                             }
                                             match channel {
@@ -253,7 +268,7 @@ pub mod server {
 
                                                     tokio::spawn(async move {
                                                         // println!("Reader start...");
-                                                        let mut buf = [0; 1024];
+                                                        let mut buf = [0; 4096];
 
                                                         loop {
                                                             tokio::select! {
@@ -276,7 +291,7 @@ pub mod server {
                                                                     },
                                                                 },
                                                                 _ = sleep(Duration::from_secs(read_timeout as u64)) => {
-                                                                    println!("Reading from client timeout occurred");
+                                                                    // println!("Reading from client timeout occurred");
                                                                     break;
                                                                 }
                                                             }
@@ -285,7 +300,7 @@ pub mod server {
                                                     });
                                                 },
                                                 None => {
-                                                    eprintln!("No channel available, closed stream...");
+                                                    // eprintln!("No channel available, closed stream...");
                                                     drop(stream);
                                                 },
                                             }
@@ -320,6 +335,7 @@ pub mod server {
                     let executor = TcpListenerExecutor::build_from(listener,
                         config.channel_num,
                         config.channel_capacity,
+                        config.retry_support,
                         config.retry_max,
                         config.retry_interval,
                         config.read_timeout).await;
