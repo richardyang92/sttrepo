@@ -1,5 +1,4 @@
 # Stt engine
-
 ## 1. Installing & building dependencies
 ### 1.1 Downloading third-party dependencies
 Firstly, init submodule [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) by running:
@@ -152,3 +151,10 @@ cargo run benchmark
 | 2hour | &#10006; Not test yet | &#10006;  Not test yet |
 | ... | ... | ... |
 | 1day | &#10006; Not test yet | &#10006;  Not test yet |
+## 5. Reference
+The following open-source projects are used in this repository:
+1. `sherpa-onnx`: https://github.com/k2-fsa/sherpa-onnx
+2. `libvevent`: https://libevent.org
+
+The model used in this repository is from:
+1. `sherpa-onnx`: https://github.com/k2-fsa/sherpa-onnx
