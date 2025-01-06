@@ -102,7 +102,8 @@ cd ${workspace_folder}/sherpa/stt-c-api
 ## 4.Benchmark
 All tests are run on a MacBook Air(RAM 16G/Storage 256G) with Apple M1 Max chip.
 ### 4.1 Speed
-Step 1: Running a server:
+The server contains 10 sherpa handle and client request 10 times in parallel. To run this test, we need to run the server and client in two different terminals.
+Step 1: Open one terminal and run a server:
 For rust build:
 ```
 cd ${workspace_folder}/stt-engine
@@ -113,7 +114,7 @@ And for c++ build:
 cd ${workspace_folder}/sherpa/stt-c-api
 ./sherpa-c-api
 ```
-Step 2: Running a client for 5 times and calculate the average time:
+Step 2: Open another terminal and run a client for 5 times and calculate the average time:
 ```
 cd ${workspace_folder}/stt-engine
 cargo run client
@@ -126,7 +127,8 @@ cargo run client
 
 For now, the C++ build is slower than the Rust build. I guess it's because the libevent library is not making full use of the multi-core CPU's performance. The CPU usage for the C++ build is about 100%, whereas the Rust build exceeds 400% CPU usage.
 ### 4.2 Stabliity
-Step 1: Running a server:
+The server contains 10 sherpa handle and client continuesly request to server. To run this test, we need to run the server and client in two different terminals.
+Step 1: Open a termianl and run a server:
 For rust build:
 ```
 cd ${workspace_folder}/stt-engine
@@ -137,7 +139,7 @@ And for c++ build:
 cd ${workspace_folder}/sherpa/stt-c-api
 ./sherpa-c-api
 ```
-Step 2: Running a client:
+Step 2: Open another terminal and run a client:
 ```
 cd ${workspace_folder}/stt-engine
 cargo run benchmark
