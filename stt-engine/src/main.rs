@@ -17,8 +17,9 @@ async fn main() {
             }
         }, 
         "client" => {
+            let start_time = std::time::Instant::now();
             let mut joints = Vec::new();
-            for i in 0..20 {
+            for i in 0..10 {
                 let joint = tokio::spawn(async move {
                     let wav_file = format!("./data/segment/split_part_{}.wav", i + 1);
                     println!("Sending file: {}", wav_file);
@@ -37,6 +38,8 @@ async fn main() {
             for joint in joints {
                 joint.await.unwrap();
             }
+            let end_time = std::time::Instant::now();
+            println!("Total exectute time: {:?}", end_time - start_time);
         },
         "benchmark" => {
             // 如果args长度为3，则第三个参数为服务器地址，否则默认为127.0.0.1
