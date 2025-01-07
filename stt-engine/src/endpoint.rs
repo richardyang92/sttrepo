@@ -70,6 +70,7 @@ pub mod server {
         sender: Option<mpsc::Sender<ServerMessage>>,
         onwed_writer: Option<OwnedWriteHalf>,
         is_selected: Arc<AtomicBool>,
+        is_client_closed: Arc<AtomicBool>,
     }
 
     impl TcpStreamChannel {
@@ -80,11 +81,21 @@ pub mod server {
         fn select(&self) -> () {
             self.is_selected.store(true, std::sync::atomic::Ordering::Relaxed)
         }
+
+        fn set_client_closed(&self, client_closed: bool) -> () {
+            self.is_client_closed.store(client_closed, std::sync::atomic::Ordering::Relaxed)
+        }
     }
 
     impl Default for TcpStreamChannel {
         fn default() -> Self {
-            Self { sherpa_proxy: None, sender: None, onwed_writer: None, is_selected: Arc::new(false.into()), }
+            Self {
+                sherpa_proxy: None,
+                sender: None,
+                onwed_writer: None,
+                is_selected: Arc::new(false.into()),
+                is_client_closed: Arc::new(true.into()),
+            }
         }
     }
 
@@ -103,6 +114,7 @@ pub mod server {
                 {
                     let mut onwed_writer = self.onwed_writer.take();
                     let is_selected = self.is_selected.clone();
+                    let is_client_closed = self.is_client_closed.clone();
                     let sherpa_proxy = self.sherpa_proxy.as_ref().unwrap().clone();
                     tokio::spawn(async move {
                         while let Some(message) = rx.recv().await {
@@ -115,6 +127,7 @@ pub mod server {
                                         Ok(_) => {
                                             println!("Sharpa proxy reset successfully");
                                             is_selected.store(false, std::sync::atomic::Ordering::Relaxed);
+                                            is_client_closed.store(false, std::sync::atomic::Ordering::Relaxed);
                                         },
                                         Err(e) => {
                                             eprintln!("Error resetting sherpa proxy: {}", e);
@@ -122,27 +135,41 @@ pub mod server {
                                     }
                                 },
                                 ServerMessage::DataReceived(data) => {
-                                    if let Some(writer) = &mut onwed_writer {
-                                        if data.len() < 2 {
-                                            eprintln!("Invalid data length: {}", data.len());
-                                            continue;
-                                        } else {
-                                            // data两两一组，每组数据转成f32，然后把这些f32数据收集起来组成一个Vec<f32>
-                                            let sample = data.chunks(2).map(|chunk| {
-                                                ((chunk[1] as i16) << 8 | (chunk[0] as i16) & 0xff) as f32 / 32767f32
-                                            }).collect::<Vec<f32>>();
-                                            match sherpa_proxy.transcribe(&sample) {
-                                                Ok(result) => {
-                                                    if result != "" {
-                                                        let result = format!("{}\n", result);
-                                                        println!("Transcribed: {}", result);
-                                                        if let Err(e) = writer.write_all(result.as_bytes()).await {
-                                                            eprintln!("Error writing to stream: {}", e);
+                                    if is_client_closed.load(std::sync::atomic::Ordering::Relaxed) {
+                                        eprintln!("Client is closed, cannot receive data");
+                                    } else {
+                                        if let Some(writer) = &mut onwed_writer {
+                                            if data.len() < 2 {
+                                                eprintln!("Invalid data length: {}", data.len());
+                                                continue;
+                                            } else {
+                                                // data两两一组，每组数据转成f32，然后把这些f32数据收集起来组成一个Vec<f32>
+                                                let sample = data.chunks(2).map(|chunk| {
+                                                    ((chunk[1] as i16) << 8 | (chunk[0] as i16) & 0xff) as f32 / 32767f32
+                                                }).collect::<Vec<f32>>();
+                                                match sherpa_proxy.transcribe(&sample) {
+                                                    Ok(result) => {
+                                                        if result != "" {
+                                                            let result = format!("{}\n", result);
+                                                            println!("Transcribed: {}", result);
+                                                            // if let Err(e) = writer.write_all(result.as_bytes()).await {
+                                                            //     eprintln!("Error writing to stream: {}", e);
+                                                            // }
+                                                            match writer.write_all(result.as_bytes()).await {
+                                                                Err(e) => {
+                                                                    if e.kind() == tokio::io::ErrorKind::BrokenPipe {
+                                                                        eprintln!("Client is closed due to: {}", e);
+                                                                        is_client_closed.store(true, std::sync::atomic::Ordering::Relaxed);
+                                                                    }
+                                                                },
+                                                                _ => {},
+                                                            }
+                                                            writer.flush().await.unwrap();
                                                         }
+                                                    },
+                                                    Err(e) => {
+                                                        eprintln!("Error transcribing: {}", e);
                                                     }
-                                                },
-                                                Err(e) => {
-                                                    eprintln!("Error transcribing: {}", e);
                                                 }
                                             }
                                         }
@@ -243,6 +270,7 @@ pub mod server {
                                                     }
                                                     if let Some(ch) = channels.iter().find(|c| !c.is_selected()) {
                                                         ch.select();
+                                                        ch.set_client_closed(false);
                                                         channel.replace(Arc::clone(ch));
                                                         break;
                                                     } else {
