@@ -17,13 +17,20 @@ async fn main() {
             }
         }, 
         "client" => {
+            // 如果args长度为3，则第三个参数为服务器地址，否则默认为127.0.0.1
+            let server_addr = if args.len() == 3 {
+                args[2].clone()
+            } else {
+                "127.0.0.1".to_string()
+            };
             let start_time = std::time::Instant::now();
             let mut joints = Vec::new();
             for i in 0..10 {
+                let server_addr = server_addr.clone();
                 let joint = tokio::spawn(async move {
                     let wav_file = format!("./data/segment/split_part_{}.wav", i + 1);
                     println!("Sending file: {}", wav_file);
-                    match client::run_with("127.0.0.1".to_string(), 8888, wav_file, true).await {
+                    match client::run_with(server_addr, 8888, wav_file, true).await {
                         Ok(res) => {
                             println!("Received response: {:?}", res);
                         },
