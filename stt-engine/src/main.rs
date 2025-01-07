@@ -10,9 +10,9 @@ async fn main() {
     }
     match &*args[1] {
         "server" => {
-            let config = ServerConfig::new("127.0.0.1", 8888, 10, 20, false, 2, 2, 2);
+            let config = ServerConfig::new("0.0.0.0", 8888, 20, 20, false, 2, 2, 2);
             if let Some(server) = Server::init(config).await {
-                println!("Server started on 127.0.0.1:8888");
+                println!("Server started on 0.0.0.0:8888");
                 server.run().await;
             }
         }, 
@@ -25,12 +25,12 @@ async fn main() {
             };
             let start_time = std::time::Instant::now();
             let mut joints = Vec::new();
-            for i in 0..10 {
+            for i in 0..20 {
                 let server_addr = server_addr.clone();
                 let joint = tokio::spawn(async move {
                     let wav_file = format!("./data/segment/split_part_{}.wav", i + 1);
                     println!("Sending file: {}", wav_file);
-                    match client::run_with(server_addr, 8888, wav_file, true).await {
+                    match client::run_with(server_addr, 8888, wav_file, false).await {
                         Ok(res) => {
                             println!("Received response: {:?}", res);
                         },
@@ -55,7 +55,7 @@ async fn main() {
             } else {
                 "127.0.0.1".to_string()
             };
-            benchmark::run_benchmark(server_addr, 8888, 15).await;
+            benchmark::run_benchmark(server_addr, 8888, 30).await;
         },
         _ => {
             println!("Unknown command: {}", &args[1]);

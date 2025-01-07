@@ -2,10 +2,21 @@ use std::{io::Read, time::Duration};
 use derive_new::new;
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, time::sleep};
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RunningResult {
+    Succeccess,
+    SendFailed,
+    SendTimeout,
+    ReadEof,
+    ReadFailed,
+    ConnectFailed,
+    ConnectTimeout,
+}
+
 #[derive(Debug, Clone, new)]
 pub struct RunningRecord {
     _wav_file: String,
-    _connect_result: usize,
+    _running_result: RunningResult,
     _error_occurred: bool,
     _readfile_time: usize,
     _connecting_time: usize,
@@ -16,7 +27,7 @@ pub struct RunningRecord {
 
 impl RunningRecord {
     pub fn is_connect_success(self) -> bool {
-        self._connect_result == 0
+        self._running_result == RunningResult::Succeccess
     }
 }
 
@@ -34,6 +45,7 @@ pub async fn run_with(ip: String, port: u16, wav_file: String, debug: bool) -> R
         println!("Connecting...");
     }
 
+    let total_timeout = Duration::from_secs(20); // 设置总超时时间为20秒
     // 连接到服务器
     tokio::select! {
         stream = async move {
@@ -50,19 +62,27 @@ pub async fn run_with(ip: String, port: u16, wav_file: String, debug: bool) -> R
                 Ok((mut stream, connecting_time)) => {
                     // 发送WAV文件数据
                     let mut _error_occurred = false;
-                    let mut _connect_result = 0;
+                    let mut _running_result = RunningResult::Succeccess;
                     let mut _transcribe_result = "".to_string();
 
+                    let timeout_duration = Duration::from_secs(2); // 设置超时时间为2秒
+
                     let mut start_time = std::time::Instant::now();
-                    if let Err(_) = stream.write_all(&data).await {
-                        return Ok(RunningRecord::new(wav_file, 1, true, 0, 0, 0, 0, "".to_string()));
-                    }
+                    tokio::select! {
+                        result = stream.write_all(&data) => {
+                            if let Err(_) = result {
+                                return Ok(RunningRecord::new(wav_file, RunningResult::SendFailed, true, 0, 0, 0, 0, "".to_string()));
+                            }
+                        }
+                        _ = sleep(total_timeout) => {
+                            return Ok(RunningRecord::new(wav_file, RunningResult::SendTimeout, true, 0, 0, 0, 0, "".to_string()));
+                        }
+                    };
 
                     let sending_time = start_time.elapsed().as_nanos() as usize;
 
                     // 读取服务器响应，直到连接关闭
                     let mut buf = [0; 4096];
-                    let timeout_duration = Duration::from_secs(2); // 设置超时时间为2秒
                     start_time = std::time::Instant::now();
                     loop {
                         tokio::select! {
@@ -71,13 +91,13 @@ pub async fn run_with(ip: String, port: u16, wav_file: String, debug: bool) -> R
                                 match n {
                                     Ok(n) => {
                                         if n == 0 {
-                                            _connect_result = 2;
+                                            _running_result = RunningResult::ReadEof;
                                             return None; // 没有数据可读，连接可能已经关闭
                                         }
                                         Some(String::from_utf8_lossy(&buf[..n]).to_string())
                                     },
                                     Err(_) => {
-                                        _connect_result = 3;
+                                        _running_result = RunningResult::ReadFailed;
                                         _error_occurred = true;
                                         return None; // 读取错误，返回None
                                     },
@@ -107,16 +127,20 @@ pub async fn run_with(ip: String, port: u16, wav_file: String, debug: bool) -> R
                     }
                     let receiving_time = start_time.elapsed().as_nanos() as usize;
                     // 主动关闭连接
-                    stream.shutdown().await?;
+                    tokio::select! {
+                        _ = stream.shutdown() => {},
+                        _ = sleep(timeout_duration) => {},
+
+                    };
 
                     if debug {
                         println!("Connection closed.");
                     }
-                    Ok(RunningRecord::new(wav_file, _connect_result, _error_occurred, readfile_time, connecting_time, sending_time, receiving_time, _transcribe_result))
+                    Ok(RunningRecord::new(wav_file, _running_result, _error_occurred, readfile_time, connecting_time, sending_time, receiving_time, _transcribe_result))
                 }, // 连接成功，直接返回
-                Err(_) => Ok(RunningRecord::new(wav_file, 4, true, 0, 0, 0, 0, "".to_string())), // 连接失败，返回错误
+                Err(_) => Ok(RunningRecord::new(wav_file, RunningResult::ConnectFailed, true, 0, 0, 0, 0, "".to_string())), // 连接失败，返回错误
             }
         },
-        _ = sleep(Duration::from_secs(20)) => Ok(RunningRecord::new(wav_file, 5, true, 0, 0, 0, 0, "".to_string())), // 尝试连接时长最多不超20s，超过后服务端会断开连接
+        _ = sleep(total_timeout) => Ok(RunningRecord::new(wav_file, RunningResult::ConnectTimeout, true, 0, 0, 0, 0, "".to_string())), // 尝试连接时长最多不超20s，超过后服务端会断开连接
     }
 }
