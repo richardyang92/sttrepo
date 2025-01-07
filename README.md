@@ -99,7 +99,7 @@ cd ${workspace_folder}/sherpa/stt-c-api
 ./sherpa-c-api
 ```
 ## 4.Benchmark
-All tests are run on a MacBook Air(RAM 16G/Storage 256G) with Apple M1 Max chip.
+All tests are run on a MacBook Air(RAM 16G/Storage 256G) with Apple M1 chip.
 ### 4.1 Speed
 The server contains 10 sherpa handle and client request 10 times in parallel. To run this test, we need to run the server and client in two different terminals.
 Step 1: Open one terminal and run a server:
