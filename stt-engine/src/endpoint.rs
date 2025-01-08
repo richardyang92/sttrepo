@@ -301,7 +301,7 @@ pub mod server {
                                                         loop {
                                                             tokio::select! {
                                                                 result = async {
-                                                                    match reader.read(&mut buf).await {
+                                                                    match reader.read_exact(&mut buf).await {
                                                                         Ok(n) => {
                                                                             if n == 0 {
                                                                                 Err("End of stream")
