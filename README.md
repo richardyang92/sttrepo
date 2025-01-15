@@ -1,4 +1,6 @@
 # Stt engine
+This repo is a stt engine based on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). The basic idea is to provide a simple and easy-to-use stt engine for developers. The following picture shows the architecture of stt engine:
+![stt-engine](./design.png "stt-engine architecture")
 ## 1. Installing & building dependencies
 ### 1.1 Downloading third-party dependencies
 Firstly, init submodule [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) by running:
@@ -82,12 +84,17 @@ ls -lh sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12
 ```
 ### 3.2 Running rust build
 Executing following command to run stt-engine:
-1. run as server
+1. run as proxy
 ```
 cd ${workspace_folder}/sherpa/stt-engine
-cargo run server
+cargo run proxy
 ```
-2. run as client
+2. run as worker
+```
+cd ${workspace_folder}/sherpa/stt-engine
+cargo run worker
+```
+3. run as client
 ```
 cd ${workspace_folder}/sherpa/stt-engine
 cargo run client
@@ -99,58 +106,7 @@ cd ${workspace_folder}/sherpa/stt-c-api
 ./sherpa-c-api
 ```
 ## 4.Benchmark
-All tests are run on a MacBook Air(RAM 16G/Storage 256G) with Apple M1 chip.
-### 4.1 Speed
-The server contains 10 sherpa handle and client request 10 times in parallel. To run this test, we need to run the server and client in two different terminals.
-Step 1: Open one terminal and run a server:
-For rust build:
-```
-cd ${workspace_folder}/stt-engine
-cargo run server
-```
-And for c++ build:
-```
-cd ${workspace_folder}/sherpa/stt-c-api
-./sherpa-c-api
-```
-Step 2: Open another terminal and run a client for 5 times and calculate the average time:
-```
-cd ${workspace_folder}/stt-engine
-cargo run client
-```
-
-| Build Type | Test1 | Test2 | Test3 | Test4 | Test5 | Average |
-| --- | --- | --- | --- | --- | --- | --- |
-| Rust Build | 6.56123050s | 7.35451825s | 6.756349833s | 6.650826125s | 5.537515375s | 6.57208802s |
-| C++ Build | 9.330376833s | 10.400389667s | 10.289438333s | 10.269550458s | 10.33128725s | 10.12420851 |
-
-For now, the C++ build is slower than the Rust build. I guess it's because the libevent library is not making full use of the multi-core CPU's performance. The CPU usage for the C++ build is about 100%, whereas the Rust build exceeds 400% CPU usage.
-### 4.2 Stabliity
-The server contains 10 sherpa handle and client continuesly request to server. To run this test, we need to run the server and client in two different terminals.
-Step 1: Open a termianl and run a server:
-For rust build:
-```
-cd ${workspace_folder}/stt-engine
-cargo run server
-```
-And for c++ build:
-```
-cd ${workspace_folder}/sherpa/stt-c-api
-./sherpa-c-api
-```
-Step 2: Open another terminal and run a client:
-```
-cd ${workspace_folder}/stt-engine
-cargo run benchmark
-```
-
-| Running Time | Rust Build | C++ Build |
-| --- | --- | --- |
-| 30min | &#10004; Pass | &#10004; Pass |
-| 1hour | &#10004; Pass | &#10004; Pass |
-| 2hour | &#10006; Not test yet | &#10006;  Not test yet |
-| ... | ... | ... |
-| 1day | &#10006; Not test yet | &#10006;  Not test yet |
+todo!
 ## 5. Reference
 The following open-source projects are used in this repository:
 1. `sherpa-onnx`: https://github.com/k2-fsa/sherpa-onnx
