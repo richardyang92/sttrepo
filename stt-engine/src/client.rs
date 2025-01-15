@@ -1,146 +1,149 @@
-use std::{io::Read, time::Duration};
+use std::{fs::File, future::Future, io::Read, sync::Arc, time::Duration};
+
 use derive_new::new;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream, time::sleep};
+use tokio::{io::AsyncWriteExt, signal::ctrl_c, sync::Mutex};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum RunningResult {
-    Succeccess,
-    SendFailed,
-    SendTimeout,
-    ReadEof,
-    ReadFailed,
-    ConnectFailed,
-    ConnectTimeout,
+use crate::{endpoint::{AsyncExecute, Endpoint}, server::protol::{maker::{make_io_chunk_payload, make_packet, make_pure_packet}, parser::{is_magic_number, parse_connect_ok_payload, parse_endpoint_type, parse_packet_type, parse_transcribe_result_payload}, EndpointType, IOChunk, Packet, RwMode, IO_CHUNK_SIZE}};
+
+#[derive(Debug, new)]
+pub struct TcpClientConfig {
+    ip: String,
+    port: u16,
 }
 
-#[derive(Debug, Clone, new)]
-pub struct RunningRecord {
-    _wav_file: String,
-    _running_result: RunningResult,
-    _error_occurred: bool,
-    _readfile_time: usize,
-    _connecting_time: usize,
-    _sending_time: usize,
-    _receiving_time: usize,
-    _transcribe_result: String,
+#[derive(Debug, PartialEq)]
+pub enum TcpClientState {
+    Init,
+    Connected,
+    Rejected,
+    Eos,
 }
 
-impl RunningRecord {
-    pub fn is_connect_success(self) -> bool {
-        self._running_result == RunningResult::Succeccess
+pub struct TcpClientEndpoint {
+    ip: String,
+    port: u16,
+}
+
+impl Endpoint for TcpClientEndpoint {
+    type Config = TcpClientConfig;
+
+    type Output = Self;
+
+    fn init(config: Self::Config) -> impl Future<Output = Option<Self::Output>> {
+        async move {
+            Some(TcpClientEndpoint {
+                ip: config.ip,
+                port: config.port,
+            })
+        }
     }
 }
 
-unsafe impl Send for RunningRecord {}
-unsafe impl Sync for RunningRecord {}
+impl AsyncExecute for TcpClientEndpoint {
+    type Output = ();
 
-pub async fn run_with(ip: String, port: u16, wav_file: String, debug: bool) -> Result<RunningRecord, Box<dyn std::error::Error>> {
-    // 读取WAV文件
-    let start_time = std::time::Instant::now();
-    let mut file = std::fs::File::open(wav_file.clone())?;
-    let mut data = Vec::new();
-    file.read_to_end(&mut data).unwrap();
-    let readfile_time = start_time.elapsed().as_nanos() as usize;
-    if debug {
-        println!("Connecting...");
-    }
+    fn execute_async(&self) -> impl Future<Output = Self::Output> {
+        async move {
+            tokio::select! {
+                _ = async move {
+                    let addr = format!("{}:{}", self.ip, self.port);
+                    
+                    if let Ok(socket) = tokio::net::TcpStream::connect(addr.clone()).await {
+                        println!("Connected to {}", addr);
+                        let (mut reader, mut writer) = socket.into_split();
+                        let status = Arc::new(Mutex::new(TcpClientState::Init));
+                        let serial_no = Arc::new(Mutex::new([0u8; 6]));
+                        let client_id = Arc::new(Mutex::new(0u32));
+                        
+                        let status1 = status.clone();
+                        let serial_no1 = serial_no.clone();
+                        let client_id1 = client_id.clone();
 
-    let total_timeout = Duration::from_secs(20); // 设置总超时时间为20秒
-    // 连接到服务器
-    tokio::select! {
-        stream = async move {
-            let start_time = std::time::Instant::now();
-            match TcpStream::connect(format!("{}:{}", ip, port)).await {
-                Ok(stream) => {
-                    let connecting_time = start_time.elapsed().as_nanos() as usize;
-                    Ok((stream, connecting_time))
-                },
-                Err(_) => Err("Failed to connect"),
-            }
-        } => {
-            match stream {
-                Ok((mut stream, connecting_time)) => {
-                    // 发送WAV文件数据
-                    let mut _error_occurred = false;
-                    let mut _running_result = RunningResult::Succeccess;
-                    let mut _transcribe_result = "".to_string();
+                        println!("Sending connect packet...");
+                        let packet = make_pure_packet(EndpointType::Client, Packet::Connect);
+                        writer.write_all(&packet).await.unwrap();
+                        writer.flush().await.unwrap();
 
-                    let timeout_duration = Duration::from_secs(2); // 设置超时时间为2秒
-
-                    let mut start_time = std::time::Instant::now();
-                    tokio::select! {
-                        result = stream.write_all(&data) => {
-                            if let Err(_) = result {
-                                return Ok(RunningRecord::new(wav_file, RunningResult::SendFailed, true, 0, 0, 0, 0, "".to_string()));
-                            }
-                        }
-                        _ = sleep(total_timeout) => {
-                            return Ok(RunningRecord::new(wav_file, RunningResult::SendTimeout, true, 0, 0, 0, 0, "".to_string()));
-                        }
-                    };
-
-                    let sending_time = start_time.elapsed().as_nanos() as usize;
-
-                    // 读取服务器响应，直到连接关闭
-                    let mut buf = [0; 4096];
-                    start_time = std::time::Instant::now();
-                    loop {
-                        tokio::select! {
-                            result = async {
-                                let n = stream.read(&mut buf).await;
-                                match n {
-                                    Ok(n) => {
-                                        if n == 0 {
-                                            _running_result = RunningResult::ReadEof;
-                                            return None; // 没有数据可读，连接可能已经关闭
-                                        }
-                                        Some(String::from_utf8_lossy(&buf[..n]).to_string())
-                                    },
-                                    Err(_) => {
-                                        _running_result = RunningResult::ReadFailed;
-                                        _error_occurred = true;
-                                        return None; // 读取错误，返回None
-                                    },
+                        // 发送任务
+                        let send_joint = tokio::spawn(async move {
+                            let mut interval = tokio::time::interval(Duration::from_secs(2));
+                            loop {
+                                interval.tick().await;
+                                let status = status1.lock().await;
+                                if *status != TcpClientState::Init {
+                                    break;
                                 }
-                            } => {
-                                if let Some(result) = result {
-                                    // 以'\n'分割，打印每条消息
-                                    for line in result.split('\n') {
-                                        if !line.is_empty() {
-                                            if debug {
-                                                println!("Received for {}: {}", wav_file, line);
-                                            }
-                                            _transcribe_result = line.to_string();
-                                        }
+                            }
+                            println!("Sending data...");
+                            let status = status1.lock().await;
+                            if let TcpClientState::Connected = *status {
+                                let wav_file = "./data/segment/split_part_1.wav";
+                                if let Ok(mut file) = File::open(wav_file) {
+                                    let mut data = Vec::new();
+                                    file.read_to_end(&mut data).unwrap();
+                                    for chunk in data.chunks(IO_CHUNK_SIZE) {
+                                        let mut buffer = [0; IO_CHUNK_SIZE];
+                                        buffer[..chunk.len()].copy_from_slice(chunk);
+                                        let serial_no = *serial_no1.lock().await;
+                                        let client_id = *client_id1.lock().await;
+                                        let io_chunk = IOChunk::new(RwMode::Client, serial_no, client_id, chunk.len() as u16, buffer);
+                                        let io_chunk_payload = make_io_chunk_payload(&io_chunk);
+                                        let io_chunk_packet = make_packet(EndpointType::Client, Packet::Data, io_chunk_payload.as_slice());
+                                        writer.write_all(&io_chunk_packet).await.unwrap();
+                                        writer.flush().await.unwrap();
                                     }
                                 } else {
-                                    break; // 没有数据可读，连接可能已经关闭
+                                    println!("Failed to open file");
                                 }
-                            },
-                            _ = sleep(timeout_duration) => {
-                                if debug {
-                                    println!("Reading from server timeout occurred");
-                                }
-                                break;
                             }
-                        }
-                    }
-                    let receiving_time = start_time.elapsed().as_nanos() as usize;
-                    // 主动关闭连接
-                    tokio::select! {
-                        _ = stream.shutdown() => {},
-                        _ = sleep(timeout_duration) => {},
+                        });
+                        
+                        // 接收任务
+                        let recv_joint = tokio::spawn(async move {
+                            loop {
+                                if is_magic_number(&mut reader).await.is_ok() {
+                                    if let EndpointType::Client = parse_endpoint_type(&mut reader).await {
+                                        let packet_type = parse_packet_type(&mut reader).await;
+                                        match Packet::from(packet_type) {
+                                            Packet::ConnOk => {
+                                                if let Some((serial_no_, client_id_)) = parse_connect_ok_payload(&mut reader).await {
+                                                    println!("Connected ok: serial_no: {:?}, client_id: {}", serial_no_, client_id_);
+                                                    serial_no.lock().await.copy_from_slice(&serial_no_);
+                                                    *client_id.lock().await = client_id_;
+                                                    let mut status = status.lock().await;
+                                                    *status = TcpClientState::Connected;
+                                                } else {
+                                                    println!("Connected rejected");
+                                                    let mut status = status.lock().await;
+                                                    *status = TcpClientState::Rejected;
+                                                }
+                                            },
+                                            Packet::ConnRejected => {
+                                                println!("Connected rejected");
+                                                let mut status = status.lock().await;
+                                                *status = TcpClientState::Rejected;
+                                            },
+                                            Packet::Result => {
+                                                if let Some(result) = parse_transcribe_result_payload(&mut reader).await {
+                                                    let length = result.get_length();
+                                                    let data = result.get_data();
+                                                    let result = String::from_utf8_lossy(&data[..length as usize]).to_string();
+                                                    println!("Result: {}", result);
+                                                }
+                                            },
+                                            _ => {},
+                                        }
+                                    }
+                                }
+                            }
+                        });
 
-                    };
-
-                    if debug {
-                        println!("Connection closed.");
+                        send_joint.await.unwrap();
+                        recv_joint.await.unwrap();
                     }
-                    Ok(RunningRecord::new(wav_file, _running_result, _error_occurred, readfile_time, connecting_time, sending_time, receiving_time, _transcribe_result))
-                }, // 连接成功，直接返回
-                Err(_) => Ok(RunningRecord::new(wav_file, RunningResult::ConnectFailed, true, 0, 0, 0, 0, "".to_string())), // 连接失败，返回错误
+                } => {},
+                _ = ctrl_c() => {},
             }
-        },
-        _ = sleep(total_timeout) => Ok(RunningRecord::new(wav_file, RunningResult::ConnectTimeout, true, 0, 0, 0, 0, "".to_string())), // 尝试连接时长最多不超20s，超过后服务端会断开连接
+        }
     }
 }
