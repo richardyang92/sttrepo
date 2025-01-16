@@ -3,7 +3,7 @@ use std::{fs::File, future::Future, io::Read, sync::Arc, time::Duration};
 use derive_new::new;
 use tokio::{io::AsyncWriteExt, signal::ctrl_c, sync::Mutex};
 
-use crate::{endpoint::{AsyncExecute, Endpoint}, server::protol::{maker::{make_io_chunk_payload, make_packet, make_pure_packet}, parser::{is_magic_number_limited, parse_connect_ok_payload, parse_endpoint_type, parse_packet_type, parse_transcribe_result_payload}, EndpointType, IOChunk, Packet, RwMode, IO_CHUNK_SIZE}};
+use crate::{endpoint::{AsyncExecute, Endpoint}, server::protol::{maker::{make_connection_info_payload, make_io_chunk_payload, make_packet, make_pure_packet}, parser::{is_magic_number_limited, parse_connection_info_payload, parse_endpoint_type, parse_packet_type, parse_transcribe_result_payload}, EndpointType, IOChunk, Packet, RwMode, IO_CHUNK_SIZE}};
 
 #[derive(Debug, new)]
 pub struct TcpClientConfig {
@@ -81,20 +81,28 @@ impl AsyncExecute for TcpClientEndpoint {
                             println!("Sending data...");
                             let status = status1.lock().await;
                             if let TcpClientState::Connected = *status {
-                                if let Ok(mut file) = File::open(wav_file) {
+                                let serial_no = *serial_no1.lock().await;
+                                let client_id = *client_id1.lock().await;
+                                if let Ok(mut file) = File::open(wav_file.clone()) {
                                     let mut data = Vec::new();
                                     file.read_to_end(&mut data).unwrap();
                                     for chunk in data.chunks(IO_CHUNK_SIZE) {
                                         let mut buffer = [0; IO_CHUNK_SIZE];
                                         buffer[..chunk.len()].copy_from_slice(chunk);
-                                        let serial_no = *serial_no1.lock().await;
-                                        let client_id = *client_id1.lock().await;
                                         let io_chunk = IOChunk::new(RwMode::Client, serial_no, client_id, chunk.len() as u16, buffer);
                                         let io_chunk_payload = make_io_chunk_payload(&io_chunk);
                                         let io_chunk_packet = make_packet(EndpointType::Client, Packet::Data, io_chunk_payload.as_slice());
                                         writer.write_all(&io_chunk_packet).await.unwrap();
                                         writer.flush().await.unwrap();
                                     }
+
+                                    // 主动发送Eos包
+                                    let eos_payload = make_connection_info_payload(&serial_no, &client_id);
+                                    let eos_packet = make_packet(EndpointType::Client, Packet::Eos, eos_payload.as_slice());
+                                    writer.write_all(&eos_packet).await.unwrap();
+                                    writer.flush().await.unwrap();
+                                } else {
+                                    println!("Failed to open file: {}", wav_file);
                                 }
                             }
                         });
@@ -102,12 +110,12 @@ impl AsyncExecute for TcpClientEndpoint {
                         // 接收任务
                         let recv_joint = tokio::spawn(async move {
                             loop {
-                                if is_magic_number_limited(&mut reader, 1000).await.is_ok() {
+                                if is_magic_number_limited(&mut reader, 10000).await.is_ok() {
                                     if let EndpointType::Client = parse_endpoint_type(&mut reader).await {
                                         let packet_type = parse_packet_type(&mut reader).await;
                                         match Packet::from(packet_type) {
                                             Packet::ConnOk => {
-                                                if let Some((serial_no_, client_id_)) = parse_connect_ok_payload(&mut reader).await {
+                                                if let Some((serial_no_, client_id_)) = parse_connection_info_payload(&mut reader).await {
                                                     println!("Connected ok: serial_no: {:?}, client_id: {}", serial_no_, client_id_);
                                                     serial_no.lock().await.copy_from_slice(&serial_no_);
                                                     *client_id.lock().await = client_id_;
@@ -129,7 +137,7 @@ impl AsyncExecute for TcpClientEndpoint {
                                                     let length = result.get_length();
                                                     let data = result.get_data();
                                                     let result = String::from_utf8_lossy(&data[..length as usize]).to_string();
-                                                    println!("Result: {}", result);
+                                                    println!("Client {}, Result: {}", *client_id.lock().await, result);
                                                 }
                                             },
                                             _ => {},

@@ -36,14 +36,14 @@ impl From<u8> for EndpointType {
 pub enum Packet {
     Register = 0,
     RegOk = 1,
-    Status = 2,
+    Alive = 2,
     Ack = 3,
     Connect = 4,
     ConnOk = 5,
     ConnRejected = 6,
     Data = 7,
     Result = 8,
-    Alive = 9,
+    Eos = 9,
     Unknown = 255,
 }
 
@@ -52,14 +52,14 @@ impl From<u8> for Packet {
         match value {
             0 => Packet::Register,
             1 => Packet::RegOk,
-            2 => Packet::Status,
+            2 => Packet::Alive,
             3 => Packet::Ack,
             4 => Packet::Connect,
             5 => Packet::ConnOk,
             6 => Packet::ConnRejected,
             7 => Packet::Data,
             8 => Packet::Result,
-            9 => Packet::Alive,
+            9 => Packet::Eos,
             _ => Packet::Unknown,
         }
     }
@@ -82,12 +82,12 @@ impl Register {
 }
 
 #[derive(Debug, Clone, Copy, new)]
-pub struct Ack {
+pub struct Alive {
     serial_no: SerialNo,
     available: bool,
 }
 
-impl Ack {
+impl Alive {
     pub fn get_serial_no(&self) -> SerialNo {
         self.serial_no
     }
@@ -163,7 +163,7 @@ impl TranscribeResult {
 }
 
 pub mod maker {
-    use super::{Ack, ClientId, EndpointType, IOChunk, Packet, Register, SerialNo, TranscribeResult, MAGCI_NUMBER};
+    use super::{Alive, ClientId, EndpointType, IOChunk, Packet, Register, SerialNo, TranscribeResult, MAGCI_NUMBER};
 
     pub fn make_serial_no(ip: [u8; 4], port: u16) -> SerialNo {
         let mut serial_no: SerialNo = [0; 6];
@@ -179,13 +179,13 @@ pub mod maker {
         payload
     }
 
-    pub fn make_ack_payload(ack: &Ack) -> Vec<u8> {
+    pub fn make_alive_payload(ack: &Alive) -> Vec<u8> {
         let mut payload = ack.serial_no.to_vec();
         payload.push(if ack.available { 1u8 } else { 0u8 });
         payload
     }
 
-    pub fn make_connect_ok_payload(serial_no: &SerialNo, client_id: &ClientId) -> Vec<u8> {
+    pub fn make_connection_info_payload(serial_no: &SerialNo, client_id: &ClientId) -> Vec<u8> {
         let mut payload = serial_no.to_vec();
         payload.extend_from_slice(&client_id.to_be_bytes());
         payload
@@ -233,7 +233,7 @@ pub mod parser {
 
     use crate::endpoint::SttResult;
 
-    use super::{Ack, ClientId, EndpointType, IOChunk, Packet, Register, SerialNo, TranscribeResult, IO_CHUNK_SIZE, MAGCI_NUMBER};
+    use super::{Alive, ClientId, EndpointType, IOChunk, Packet, Register, SerialNo, TranscribeResult, IO_CHUNK_SIZE, MAGCI_NUMBER};
 
     pub async fn is_magic_number_limited(reader: &mut OwnedReadHalf, limit: u64) -> SttResult<Error> {
         tokio::select! {
@@ -304,13 +304,13 @@ pub mod parser {
         }
     }
 
-    // CLIENT CONN_OK PACKET PAYLOAD
+    // CLIENT CONNTION_INFO PACKET PAYLOAD
     // |----------------------------------|
     // |   serial_no | client_id          |
     // |----------------------------------|
     // |   6 bytes   |  4 bytes           |
     // |----------------------------------|
-    pub async fn parse_connect_ok_payload(reader: &mut OwnedReadHalf) -> Option<(SerialNo, ClientId)> {
+    pub async fn parse_connection_info_payload(reader: &mut OwnedReadHalf) -> Option<(SerialNo, ClientId)> {
         let mut payload = [0u8; 10];
         if let Ok(_) = reader.read_exact(&mut payload).await {
             Some((payload[0..6].try_into().unwrap(), u32::from_be_bytes(payload[6..10].try_into().unwrap())))
@@ -319,13 +319,13 @@ pub mod parser {
         }
     }
 
-    // WORKER STATUS PACKET PAYLOAD
+    // WORKER ACK PACKET PAYLOAD
     // |----------------------------------|
     // |   serial_no                      |
     // |----------------------------------|
     // |   6 bytes                        |
     // |----------------------------------|
-    pub async fn parse_status_payload(reader: &mut OwnedReadHalf) -> Option<SerialNo> {
+    pub async fn parse_ack_payload(reader: &mut OwnedReadHalf) -> Option<SerialNo> {
         let mut payload = [0u8; 6];
         if let Ok(_) = reader.read_exact(&mut payload).await {
             Some(payload)
@@ -334,16 +334,16 @@ pub mod parser {
         }
     }
 
-    // WORKER ACK PACKET PAYLOAD
+    // WORKER ALIVE PACKET PAYLOAD
     // |----------------------------------|
     // |   serial_no |   available        |
     // |----------------------------------|
     // |   6 bytes   |    1 byte          |
     // |----------------------------------|
-    pub async fn parse_ack_payload(reader: &mut OwnedReadHalf) -> Option<Ack> {
+    pub async fn parse_alive_payload(reader: &mut OwnedReadHalf) -> Option<Alive> {
         let mut payload = [0u8; 7];
         if let Ok(_) = reader.read_exact(&mut payload).await {
-            Some(Ack {
+            Some(Alive {
                 serial_no: payload[0..6].try_into().unwrap(),
                 available: payload[6] != 0,
             })

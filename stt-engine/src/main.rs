@@ -35,7 +35,7 @@ async fn main() {
                     .value_name("PROXY_PORT"))
                 .arg(Arg::new("woker_count")
                     .short('w')
-                    .long("wokers")
+                    .long("workers")
                     .default_value("1")
                     .value_name("WORKER_COUNT"))
             
@@ -53,11 +53,16 @@ async fn main() {
                     .long("port")
                     .default_value("8888")
                     .value_name("PROXY_PORT"))
-                .arg(Arg::new("file")
-                    .short('f')
-                    .long("file")
+                .arg(Arg::new("wav_dir")
+                    .short('d')
+                    .long("dir")
                     .required(true)
-                    .value_name("WAV_FILE_PATH"))
+                    .value_name("WAV_DIR"))
+                .arg(Arg::new("client_count")
+                    .short('c')
+                    .long("clients")
+                    .default_value("1")
+                    .value_name("CLIENT_COUNT"))
         ).get_matches();
 
         match matches.subcommand() {
@@ -117,11 +122,31 @@ async fn main() {
                             Err(_) => 8888,
                         }
                     }).unwrap();
-                let file_path = sub_m.get_one::<String>("file").unwrap();
-                println!("Starting client on {}:{}, processing file: {}",ip, port, file_path);
+                let wav_dir = sub_m.get_one::<String>("wav_dir").unwrap();
+                let client_count = sub_m.get_one::<String>("client_count")
+                    .map(|w| {
+                        match w.parse::<usize>() {
+                            Ok(w) => w,
+                            Err(_) => 1,
+                        }
+                    }).unwrap();
+                println!("Starting {} clients on {}:{}, wav dir: {}",client_count, ip, port, wav_dir);
 
-                if let Some(client) = TcpClientEndpoint::init(TcpClientConfig::new(ip.to_string(), port, file_path.to_string())).await {
-                    client.execute_async().await;
+                let mut clients = vec![];
+                for i in 0..client_count {
+                    let ip = ip.clone();
+                    let wav_dir = wav_dir.clone();
+                    let client = tokio::spawn(async move {
+                        let wav_file = format!("{}/split_part_{}.wav", wav_dir, i + 1);
+                        if let Some(client) = TcpClientEndpoint::init(TcpClientConfig::new(ip, port, wav_file)).await {
+                            client.execute_async().await;
+                        }
+                    });
+                    clients.push(client);
+                }
+
+                for client in clients {
+                    client.await.unwrap();
                 }
             },
             _ => {},

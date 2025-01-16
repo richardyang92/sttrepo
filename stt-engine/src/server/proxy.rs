@@ -1,9 +1,9 @@
-use std::{future::Future, io::ErrorKind, sync::Arc, time::Duration};
+use std::{future::Future, io::ErrorKind, sync::{Arc, Mutex}, time::Duration};
 
 use derive_new::new;
 use tokio::{io::AsyncWriteExt, net::TcpListener, signal::ctrl_c, sync::RwLock};
 
-use crate::{endpoint::{AsyncExecute, AsyncSend, Channel, Endpoint}, server::{channel::WorkerChannelMessage, protol::{maker::{make_pure_packet, make_serial_no}, parser::{is_magic_number, parse_ack_payload, parse_endpoint_type, parse_io_chunk_payload, parse_packet_type, parse_register_payload}, EndpointType, Packet, RwMode}}};
+use crate::{endpoint::{AsyncExecute, AsyncSend, Channel, Endpoint}, server::{channel::WorkerChannelMessage, protol::{maker::{make_pure_packet, make_serial_no}, parser::{is_magic_number, parse_alive_payload, parse_connection_info_payload, parse_endpoint_type, parse_io_chunk_payload, parse_packet_type, parse_register_payload}, EndpointType, Packet, RwMode}}};
 
 use super::channel::WorkerChannel;
 
@@ -32,16 +32,18 @@ impl AsyncExecute for TcpListenerEndpoint {
                             tokio::spawn(async move {
                                 println!("Received connection from {}", addr);
                                 let (mut reader, mut writer) = socket.into_split();
+                                let lock = Mutex::new(0);
+
                                 match is_magic_number(&mut reader).await {
                                     Ok(_) => {
                                         match parse_endpoint_type(&mut reader).await {
                                             EndpointType::Handler => {
                                                 let packet_type = parse_packet_type(&mut reader).await;
                                                 if let Packet::Register = Packet::from(packet_type) {
-                                                    println!("Received register packet from {}", addr);
                                                     if let Some(register_payload) = parse_register_payload(&mut reader).await {
                                                         let ip = register_payload.get_ip();
                                                         let port = register_payload.get_port();
+                                                        println!("Received register packet from {}, ip={:?}, port={}", addr, ip, port);
                                                         let serial_no = make_serial_no(ip, port);
     
                                                         let mut channel = WorkerChannel::new(serial_no);
@@ -54,20 +56,25 @@ impl AsyncExecute for TcpListenerEndpoint {
                                             },
                                             EndpointType::Client => {
                                                 if let Packet::Connect = Packet::from(parse_packet_type(&mut reader).await) {
-                                                    println!("Received connect packet from {}", addr);
+                                                    println!("Received connect packet from {}>>", addr);
                                                     let workers = workers.read().await;
-                                                    if let Some(worker) = workers.iter().find(|w| w.is_available()) {
-                                                        let serial_no = worker.get_serial_no();
-                                                        println!("Received connect packet from {}, attaching to worker {:?}", addr, serial_no);
-                                                        // 生成一个随机的u32整形数作为client_id
-                                                        let client_id = rand::random::<u32>();
-                                                        worker.send(WorkerChannelMessage::ConnOk(client_id, writer)).await;
-                                                    } else {
-                                                        println!("Received connect packet from {}, but no available worker", addr);
-                                                        // 如果workers没有空闲的worker，则拒绝连接
-                                                        let conn_reject_packet = make_pure_packet(EndpointType::Client, Packet::ConnRejected);
-                                                        writer.write_all(&conn_reject_packet).await.unwrap();
-                                                        writer.flush().await.unwrap();
+                                                    if lock.lock().is_ok() {
+                                                        if let Some(worker) = workers.iter().find(|w| w.is_available()) {
+                                                            let serial_no = worker.get_serial_no();
+                                                            println!("Received connect packet from {}, attaching to worker {:?}", addr, serial_no);
+                                                            worker.update_available(false);
+                                                            println!("Updated worker {:?} available status to false", serial_no);
+                                                            // 生成一个随机的u32整形数作为client_id
+                                                            let client_id = rand::random::<u32>();
+                                                            worker.send(WorkerChannelMessage::ConnOk(client_id, writer)).await;
+                                                        } else {
+                                                            println!("Received connect packet from {}, but no available worker", addr);
+                                                            // 如果workers没有空闲的worker，则拒绝连接
+                                                            let conn_reject_packet = make_pure_packet(EndpointType::Client, Packet::ConnRejected);
+                                                            writer.write_all(&conn_reject_packet).await.unwrap();
+                                                            writer.flush().await.unwrap();
+                                                        }
+                                                        println!("Received connect packet from {}<<", addr);
                                                     }
                                                 }
                                             },
@@ -92,14 +99,14 @@ impl AsyncExecute for TcpListenerEndpoint {
                                                 EndpointType::Handler => {
                                                     let packet_type = parse_packet_type(&mut reader).await;
                                                     match Packet::from(packet_type) {
-                                                        Packet::Ack => {
-                                                            if let Some(ack_payload) = parse_ack_payload(&mut reader).await {
+                                                        Packet::Alive => {
+                                                            if let Some(ack_payload) = parse_alive_payload(&mut reader).await {
                                                                 let serial_no = ack_payload.get_serial_no();
                                                                 let available = ack_payload.is_available();
                                                                 println!("Received ack packet from {}, serial_no={:?}, available={}", addr, serial_no, available);
                                                                 let workers = workers.read().await;
                                                                 if let Some(worker) = workers.iter().find(|w| w.get_serial_no() == serial_no.into()) {
-                                                                    worker.send(WorkerChannelMessage::Ack(serial_no, available)).await;
+                                                                    worker.send(WorkerChannelMessage::Alive(serial_no, available)).await;
                                                                 }
                                                             }
                                                         },
@@ -134,6 +141,17 @@ impl AsyncExecute for TcpListenerEndpoint {
                                                                 }
                                                             }
                                                         },
+                                                        Packet::Eos => {
+                                                            if let Some(eos_payload) = parse_connection_info_payload(&mut reader).await {
+                                                                let serial_no = eos_payload.0;
+                                                                let client_id = eos_payload.1;
+                                                                println!("Received EOS packet from {}, serial_no={:?}", addr, serial_no);
+                                                                let workers = workers.read().await;
+                                                                if let Some(worker) = workers.iter().find(|w| w.get_serial_no() == serial_no.into()) {
+                                                                    worker.send(WorkerChannelMessage::Eos(serial_no, client_id)).await;
+                                                                }
+                                                            }
+                                                        },
                                                         _ => {}
                                                     }
                                                 },
@@ -160,18 +178,21 @@ impl AsyncExecute for TcpListenerEndpoint {
                 } => {},
                 _ = async move {
                     let workers = self.workers.clone();
-                    // 向每个worker每隔10s发送一个Status包更新worker状态，同时清理已经失效的客户端
-                    let mut interval = tokio::time::interval(Duration::from_secs(1));
+                    // 向每个worker每隔10s发送一个Status包清理已经失效的客户端
+                    let mut interval = tokio::time::interval(Duration::from_secs(10));
                     loop {
                         interval.tick().await;
                         {
                             let workers = workers.read().await;
-
-                            println!("sending status packet to workers...");
                             for worker in workers.iter() {
-                                let serial_no = worker.get_serial_no();
-                                worker.send(WorkerChannelMessage::Status(*serial_no)).await;
+                                worker.send(WorkerChannelMessage::Status).await;
                             }
+                        }
+
+                        {
+                            let mut workers = workers.write().await;
+                            workers.retain(|w| !w.is_stream_closed());
+                            println!("alive worker size: {}", workers.len());
                         }
                     }
                 } => {},

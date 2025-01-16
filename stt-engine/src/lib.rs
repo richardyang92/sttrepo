@@ -7,4 +7,3 @@ pub mod server {
 }
 pub mod client;
 pub mod sherpa;
-pub mod benchmark;

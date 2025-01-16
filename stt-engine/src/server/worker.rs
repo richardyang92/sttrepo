@@ -1,9 +1,9 @@
 use std::{future::Future, io::ErrorKind, sync::{atomic::AtomicBool, Arc}};
 
 use derive_new::new;
-use tokio::{io::AsyncWriteExt, net::TcpStream, signal::ctrl_c};
+use tokio::{io::AsyncWriteExt, net::{tcp::OwnedWriteHalf, TcpStream}, signal::ctrl_c};
 
-use crate::{endpoint::{AsyncExecute, Endpoint}, server::protol::{maker::{make_ack_payload, make_io_chunk_payload, make_packet, make_register_payload}, parser::{is_magic_number_limited, parse_endpoint_type, parse_io_chunk_payload, parse_packet_type, parse_reg_ok_payload}, Ack, EndpointType, IOChunk, Packet, Register, RwMode, IO_CHUNK_SIZE}, sherpa::Sherpa};
+use crate::{endpoint::{AsyncExecute, Endpoint}, server::protol::{maker::{make_alive_payload, make_io_chunk_payload, make_packet, make_register_payload}, parser::{is_magic_number_limited, parse_ack_payload, parse_endpoint_type, parse_io_chunk_payload, parse_packet_type, parse_reg_ok_payload}, Alive, EndpointType, IOChunk, Packet, Register, RwMode, IO_CHUNK_SIZE}, sherpa::Sherpa};
 
 use super::protol::SerialNo;
 
@@ -35,6 +35,16 @@ impl TcpWorkerEndpoint {
     }
 }
 
+impl TcpWorkerEndpoint {
+    async fn send_alive_packet(sherpa: &Sherpa, writer: &mut OwnedWriteHalf, serial_no: SerialNo, available: bool) -> () {
+        sherpa.reset().unwrap();
+        let alive_payload = make_alive_payload(&Alive::new(serial_no, available));
+        let alive_packet = make_packet(EndpointType::Handler, Packet::Alive, &alive_payload);
+        writer.write_all(&alive_packet).await.unwrap();
+        writer.flush().await.unwrap();
+    }
+}
+
 impl AsyncExecute for TcpWorkerEndpoint {
     type Output = ();
 
@@ -45,9 +55,10 @@ impl AsyncExecute for TcpWorkerEndpoint {
                     let addr = format!("{}:{}", self.ip, self.port);
                     if let Ok(socket) = TcpStream::connect(addr.clone()).await {
                         println!("Connected to {} success", addr);
+                        let local_addr = socket.local_addr().unwrap();
+                        let port = local_addr.port();
                         let (mut reader, mut writer) = socket.into_split();
                         let ip = self.exact_ip();
-                        let port = self.port;
                         let register_payload = make_register_payload(&Register::new(ip, port));
                         let register_packet = make_packet(EndpointType::Handler, Packet::Register, &register_payload);
                         writer.write_all(&register_packet).await.unwrap();
@@ -58,7 +69,7 @@ impl AsyncExecute for TcpWorkerEndpoint {
                         let sherpa = self.sherpa.clone();
 
                         loop {
-                            match is_magic_number_limited(&mut reader, 5000).await {
+                            match is_magic_number_limited(&mut reader, 10000).await {
                                 Ok(_) => {
                                     match parse_endpoint_type(&mut reader).await {
                                         EndpointType::Handler => {
@@ -70,11 +81,14 @@ impl AsyncExecute for TcpWorkerEndpoint {
                                                         serial_no.copy_from_slice(&serial_no_);
                                                     }
                                                 },
-                                                Packet::Status => {
-                                                    let ack = Ack::new(serial_no, avaibale.load(std::sync::atomic::Ordering::Relaxed));
-                                                    let ack_payload = make_ack_payload(&ack);
-                                                    let ack_packet = make_packet(EndpointType::Handler, Packet::Ack, ack_payload.as_slice());
-                                                    writer.write_all(&ack_packet).await.unwrap();
+                                                Packet::Ack => {
+                                                    let serial_no = parse_ack_payload(&mut reader).await;
+                                                    println!("Ack: {:?}", &serial_no);
+                                                },
+                                                Packet::Eos => {
+                                                    println!("Eos received, reset sherpa and set available to true");
+                                                    avaibale.store(true, std::sync::atomic::Ordering::Relaxed);
+                                                    Self::send_alive_packet(&sherpa, &mut writer, serial_no, true).await;
                                                 }
                                                 _ => {}
                                             }
@@ -83,7 +97,10 @@ impl AsyncExecute for TcpWorkerEndpoint {
                                             let packet_type = parse_packet_type(&mut reader).await;
                                             match Packet::from(packet_type) {
                                                 Packet::Data => {
-                                                    avaibale.store(false, std::sync::atomic::Ordering::Relaxed);
+                                                    if avaibale.load(std::sync::atomic::Ordering::Relaxed) {
+                                                        avaibale.store(false, std::sync::atomic::Ordering::Relaxed);
+                                                        Self::send_alive_packet(&sherpa, &mut writer, serial_no, false).await;
+                                                    }
                                                     if let Some(io_chunk_payload) = parse_io_chunk_payload(&mut reader).await {
                                                         let len = io_chunk_payload.get_length() as usize;
                                                         let client_id = io_chunk_payload.get_client_id();
@@ -99,7 +116,7 @@ impl AsyncExecute for TcpWorkerEndpoint {
                                                                     if result != "" {
                                                                         // 去除result中的空格
                                                                         let result = result.replace(" ", "");
-                                                                        println!("Transcribed: {}", result);
+                                                                        println!("ClientId {} Transcribed: {}", client_id, result);
                                                                         // length等于result转化为bytes的长度
                                                                         let buffer: Vec<u8> = result.bytes().collect();
                                                                         let length = buffer.len();
@@ -125,15 +142,16 @@ impl AsyncExecute for TcpWorkerEndpoint {
                                     }
                                 },
                                 Err(e) => {
-                                    sherpa.reset().unwrap();
                                     match e.kind() {
                                         ErrorKind::UnexpectedEof => {
                                             println!("Unexpected EOF");
                                             break;
                                         },
                                         ErrorKind::TimedOut => {
-                                            println!("Timed out");
-                                            avaibale.store(true, std::sync::atomic::Ordering::Relaxed);
+                                            if !avaibale.load(std::sync::atomic::Ordering::Relaxed) {
+                                                avaibale.store(true, std::sync::atomic::Ordering::Relaxed);
+                                                Self::send_alive_packet(&sherpa, &mut writer, serial_no, true).await;
+                                            }
                                         }
                                         _ => {},
                                     }

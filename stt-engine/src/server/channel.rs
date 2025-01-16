@@ -5,22 +5,24 @@ use tokio::{io::AsyncWriteExt, net::tcp::OwnedWriteHalf, sync::{mpsc, Mutex}};
 
 use crate::{endpoint::{AsyncSend, Channel}, server::protol::{maker::{make_io_chunk_payload, make_pure_packet, make_transcribe_result_payload}, TranscribeResult}};
 
-use super::protol::{maker::{make_connect_ok_payload, make_packet}, ClientId, EndpointType, IOChunk, Packet, SerialNo};
+use super::protol::{maker::{make_connection_info_payload, make_packet}, ClientId, EndpointType, IOChunk, Packet, SerialNo};
 
 pub enum WorkerChannelMessage {
     Attach(OwnedWriteHalf),
     RegisterOk(SerialNo),
-    Status(SerialNo),
-    Ack(SerialNo, bool),
+    Status,
+    Alive(SerialNo, bool),
     ConnOk(ClientId, OwnedWriteHalf),
     ClientData(IOChunk),
     ServerData(IOChunk),
+    Eos(SerialNo, ClientId),
     Detach,
 }
 
 pub struct WorkerChannel {
     serial_no: Arc<SerialNo>,
     available: Arc<AtomicBool>,
+    stream_closed: Arc<AtomicBool>,
     sender: Option<mpsc::Sender<WorkerChannelMessage>>,
 }
 
@@ -28,10 +30,38 @@ unsafe impl Send for WorkerChannel {}
 unsafe impl Sync for WorkerChannel {}
 
 impl WorkerChannel {
+    async fn send_worker_packet(writer: &mut OwnedWriteHalf, packet: Vec<u8>, stream_closed: Arc<AtomicBool>) -> () {
+        match writer.write_all(&packet).await {
+            Ok(_) => writer.flush().await.unwrap(),
+            Err(_) => stream_closed.store(true, Ordering::Relaxed),
+        }
+    }
+
+    async fn send_client_packet(tcp_stream_map: DashMap<ClientId, Arc<Mutex<OwnedWriteHalf>>>, packet: Vec<u8>, client_id: ClientId) -> () {
+        if let Some(writer) = tcp_stream_map.get(&client_id) {
+            let mut writer = (*writer).lock().await;
+            let mut invalided_client_id: Option<ClientId> = None;
+            match writer.write_all(&packet).await {
+                Ok(_) => writer.flush().await.unwrap(),
+                Err(e) => {
+                    println!("send packet result with ClientId: {} failed, because of error: {}", client_id, e);
+                    invalided_client_id = Some(client_id);
+                    writer.shutdown().await.unwrap();
+                },
+            }
+            if let Some(client_id) = invalided_client_id {
+                tcp_stream_map.remove(&client_id);
+            }
+        }
+    }
+}
+
+impl WorkerChannel {
     pub fn new(serial_no: SerialNo) -> Self {
         Self {
             serial_no: Arc::new(serial_no),
             available: Arc::new(AtomicBool::new(true)),
+            stream_closed: Arc::new(AtomicBool::new(false)),
             sender: None,
         }
     }
@@ -42,6 +72,14 @@ impl WorkerChannel {
 
     pub fn is_available(&self) -> bool {
         self.available.load(Ordering::Relaxed)
+    }
+
+    pub fn update_available(&self, available: bool) {
+        self.available.store(available, Ordering::Relaxed);
+    }
+
+    pub fn is_stream_closed(&self) -> bool {
+        self.stream_closed.load(Ordering::Relaxed)
     }
 }
 
@@ -58,6 +96,7 @@ impl Channel for WorkerChannel {
             {
                 let serial_no = self.serial_no.clone();
                 let available = self.available.clone();
+                let stream_closed = self.stream_closed.clone();
 
                 tokio::spawn(async move {
                     let mut owned_writer: Option<OwnedWriteHalf> = None;
@@ -72,10 +111,7 @@ impl Channel for WorkerChannel {
                             WorkerChannelMessage::RegisterOk(serial_no) => {
                                 let reg_ok_packet = make_packet(EndpointType::Handler, Packet::RegOk, &serial_no);
                                 if let Some(ref mut writer) = owned_writer {
-                                    match writer.write_all(&reg_ok_packet).await {
-                                        Ok(_) => writer.flush().await.unwrap(),
-                                        Err(e) => println!("register failed with serial_no: {:?} because of error: {}", serial_no, e),
-                                    }
+                                    Self::send_worker_packet(writer, reg_ok_packet, stream_closed.clone()).await;
                                 }
                             },
                             WorkerChannelMessage::ConnOk(client_id, writer) => {
@@ -83,21 +119,13 @@ impl Channel for WorkerChannel {
                                     tcp_stream_map.insert(client_id, Arc::new(Mutex::new(writer)));
                                     println!("conn_ok received, client_id: {:?}", client_id);
 
-                                    let conn_ok_payload = make_connect_ok_payload(&serial_no, &client_id);
+                                    let conn_ok_payload = make_connection_info_payload(&serial_no, &client_id);
                                     let conn_ok_packet = make_packet(EndpointType::Client, Packet::ConnOk, &conn_ok_payload);
                                     println!("send conn_ok packet: {:?}", conn_ok_packet);
-                                    
-                                    {
-                                        if let Some(writer) = tcp_stream_map.get(&client_id) {
-                                            let mut writer = (*writer).lock().await;
-                                            if let Err(e) = writer.write_all(&conn_ok_packet).await {
-                                                println!("detach worker with serial_no: {:?} because of error: {}", serial_no, e);
-                                            }
-                                        }
-                                    }
+                                    Self::send_client_packet(tcp_stream_map.clone(), conn_ok_packet, client_id).await;
                                 }
                             },
-                            WorkerChannelMessage::Status(serial_no) => {
+                            WorkerChannelMessage::Status => {
                                 let mut unused_client_ids: Vec<ClientId> = vec![];
                                 // 找出无效连接
                                 for tcp_stream in tcp_stream_map.iter() {
@@ -115,44 +143,43 @@ impl Channel for WorkerChannel {
                                 for client_id in unused_client_ids {
                                     tcp_stream_map.remove(&client_id);
                                 }
-                                // 发送心跳包，更新worker状态
-                                println!("status packet received, serial_no: {:?}", serial_no);
-                                let alive_packet = make_packet(EndpointType::Handler, Packet::Status, &serial_no);
+
+                                // 确定Worker stream是否已关闭
+                                let ack_packet = make_packet(EndpointType::Handler, Packet::Ack, serial_no.as_ref());
                                 if let Some(ref mut writer) = owned_writer {
-                                    println!("send alive packet: {:?}", alive_packet);
-                                    if let Err(_) = writer.write_all(&alive_packet).await {
-                                        println!("worker with serial_no: {:?} is detached", serial_no);
-                                    }
+                                    Self::send_worker_packet(writer, ack_packet, stream_closed.clone()).await;
                                 }
                             },
-                            WorkerChannelMessage::Ack(serial_no, available_) => {
-                                println!("ack received, serial_no: {:?}, available: {}", serial_no, available_);
+                            WorkerChannelMessage::Alive(serial_no, available_) => {
+                                println!("alive received, serial_no: {:?}, available: {}", serial_no, available_);
                                 available.store(available_, Ordering::Relaxed);
+                                let ack_packet = make_packet(EndpointType::Handler, Packet::Ack, &serial_no);
+                                if let Some(ref mut writer) = owned_writer {
+                                    Self::send_worker_packet(writer, ack_packet, stream_closed.clone()).await;
+                                }
                             },
                             WorkerChannelMessage::ClientData(io_chunk) => {
+                                let io_chunk_payload = make_io_chunk_payload(&io_chunk);
+                                let io_chunk_packet = make_packet(EndpointType::Client, Packet::Data, &io_chunk_payload);
                                 if let Some(ref mut writer) = &mut owned_writer {
-                                    let client_id = io_chunk.get_client_id();
-                                    let io_chunk_payload = make_io_chunk_payload(&io_chunk);
-                                    let io_chunk_packet = make_packet(EndpointType::Client, Packet::Data, &io_chunk_payload);
-                                    match writer.write_all(&io_chunk_packet).await {
-                                        Ok(_) => writer.flush().await.unwrap(),
-                                        Err(e) => println!("send audio data with ClientId: {} because of error: {}", client_id, e),
-                                    }
+                                    Self::send_worker_packet(writer, io_chunk_packet, stream_closed.clone()).await;
                                 }
                             },
                             WorkerChannelMessage::ServerData(io_chunk) => {
                                 let client_id = io_chunk.get_client_id();
-                                if let Some(writer) = tcp_stream_map.get(&client_id) {
-                                    let mut writer = (*writer).lock().await;
-                                    let length = io_chunk.get_length();
-                                    let data = io_chunk.get_data();
-                                    let transcribe_result = TranscribeResult::new(length, *data);
-                                    let transcribe_result_payload = make_transcribe_result_payload(&transcribe_result);
-                                    let transcribe_result_packet = make_packet(EndpointType::Client, Packet::Result, &transcribe_result_payload);
-                                    match writer.write_all(&transcribe_result_packet).await {
-                                        Ok(_) => writer.flush().await.unwrap(),
-                                        Err(e) => println!("send transcribe result with ClientId: {} because of error: {}", client_id, e),
-                                    }
+                                let length = io_chunk.get_length();
+                                let data = io_chunk.get_data();
+                                let transcribe_result = TranscribeResult::new(length, *data);
+                                let transcribe_result_payload = make_transcribe_result_payload(&transcribe_result);
+                                let transcribe_result_packet = make_packet(EndpointType::Client, Packet::Result, &transcribe_result_payload);
+                                Self::send_client_packet(tcp_stream_map.clone(), transcribe_result_packet, client_id).await;
+                            },
+                            WorkerChannelMessage::Eos(serial_no, client_id) => {
+                                println!("eos received, serial_no: {:?}, client_id: {:?}", serial_no, client_id);
+                                let eos_payload = make_connection_info_payload(&serial_no, &client_id);
+                                let eos_packet = make_packet(EndpointType::Handler, Packet::Eos, &eos_payload);
+                                if let Some(ref mut writer) = owned_writer {
+                                    Self::send_worker_packet(writer, eos_packet, stream_closed.clone()).await;
                                 }
                             },
                             WorkerChannelMessage::Detach => {
