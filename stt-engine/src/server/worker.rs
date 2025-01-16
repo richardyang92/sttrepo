@@ -3,7 +3,7 @@ use std::{future::Future, io::ErrorKind, sync::{atomic::AtomicBool, Arc}};
 use derive_new::new;
 use tokio::{io::AsyncWriteExt, net::TcpStream, signal::ctrl_c};
 
-use crate::{endpoint::{AsyncExecute, Endpoint}, server::protol::{maker::{make_ack_payload, make_io_chunk_payload, make_packet, make_register_payload}, parser::{is_magic_number, parse_endpoint_type, parse_io_chunk_payload, parse_packet_type, parse_reg_ok_payload}, Ack, EndpointType, IOChunk, Packet, Register, RwMode, IO_CHUNK_SIZE}, sherpa::Sherpa};
+use crate::{endpoint::{AsyncExecute, Endpoint}, server::protol::{maker::{make_ack_payload, make_io_chunk_payload, make_packet, make_register_payload}, parser::{is_magic_number_limited, parse_endpoint_type, parse_io_chunk_payload, parse_packet_type, parse_reg_ok_payload}, Ack, EndpointType, IOChunk, Packet, Register, RwMode, IO_CHUNK_SIZE}, sherpa::Sherpa};
 
 use super::protol::SerialNo;
 
@@ -58,7 +58,7 @@ impl AsyncExecute for TcpWorkerEndpoint {
                         let sherpa = self.sherpa.clone();
 
                         loop {
-                            match is_magic_number(&mut reader).await {
+                            match is_magic_number_limited(&mut reader, 5000).await {
                                 Ok(_) => {
                                     match parse_endpoint_type(&mut reader).await {
                                         EndpointType::Handler => {
@@ -70,7 +70,7 @@ impl AsyncExecute for TcpWorkerEndpoint {
                                                         serial_no.copy_from_slice(&serial_no_);
                                                     }
                                                 },
-                                                Packet::Alive => {
+                                                Packet::Status => {
                                                     let ack = Ack::new(serial_no, avaibale.load(std::sync::atomic::Ordering::Relaxed));
                                                     let ack_payload = make_ack_payload(&ack);
                                                     let ack_packet = make_packet(EndpointType::Handler, Packet::Ack, ack_payload.as_slice());
@@ -125,16 +125,24 @@ impl AsyncExecute for TcpWorkerEndpoint {
                                     }
                                 },
                                 Err(e) => {
-                                    if e.kind() == ErrorKind::UnexpectedEof {
-                                        println!("Connection closed");
-                                        break;
+                                    sherpa.reset().unwrap();
+                                    match e.kind() {
+                                        ErrorKind::UnexpectedEof => {
+                                            println!("Unexpected EOF");
+                                            break;
+                                        },
+                                        ErrorKind::TimedOut => {
+                                            avaibale.store(true, std::sync::atomic::Ordering::Relaxed);
+                                        }
+                                        _ => {},
                                     }
-                                    avaibale.store(true, std::sync::atomic::Ordering::Relaxed);
                                 }
                             }
                         }
                     }
-                } => {},
+                } => {
+                    self.sherpa.close().unwrap();
+                },
                 _ = ctrl_c() => {},
             }
         }

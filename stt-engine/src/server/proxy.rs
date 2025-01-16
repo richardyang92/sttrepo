@@ -57,7 +57,8 @@ impl AsyncExecute for TcpListenerEndpoint {
                                                     println!("Received connect packet from {}", addr);
                                                     let workers = workers.read().await;
                                                     if let Some(worker) = workers.iter().find(|w| w.is_available()) {
-                                                        println!("Received connect packet from {}, attaching to worker {:?}", addr, worker.get_serial_no());
+                                                        let serial_no = worker.get_serial_no();
+                                                        println!("Received connect packet from {}, attaching to worker {:?}", addr, serial_no);
                                                         // 生成一个随机的u32整形数作为client_id
                                                         let client_id = rand::random::<u32>();
                                                         worker.send(WorkerChannelMessage::ConnOk(client_id, writer)).await;
@@ -159,17 +160,17 @@ impl AsyncExecute for TcpListenerEndpoint {
                 } => {},
                 _ = async move {
                     let workers = self.workers.clone();
-                    // 向每个worker每隔10s发送一个Alive包
+                    // 向每个worker每隔10s发送一个Status包更新worker状态，同时清理已经失效的客户端
                     let mut interval = tokio::time::interval(Duration::from_secs(1));
                     loop {
                         interval.tick().await;
                         {
                             let workers = workers.read().await;
 
-                            println!("sending alive packet to workers...");
+                            println!("sending status packet to workers...");
                             for worker in workers.iter() {
                                 let serial_no = worker.get_serial_no();
-                                worker.send(WorkerChannelMessage::Alive(*serial_no)).await;
+                                worker.send(WorkerChannelMessage::Status(*serial_no)).await;
                             }
                         }
                     }

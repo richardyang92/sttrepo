@@ -3,7 +3,7 @@ use std::{fs::File, future::Future, io::Read, sync::Arc, time::Duration};
 use derive_new::new;
 use tokio::{io::AsyncWriteExt, signal::ctrl_c, sync::Mutex};
 
-use crate::{endpoint::{AsyncExecute, Endpoint}, server::protol::{maker::{make_io_chunk_payload, make_packet, make_pure_packet}, parser::{is_magic_number, parse_connect_ok_payload, parse_endpoint_type, parse_packet_type, parse_transcribe_result_payload}, EndpointType, IOChunk, Packet, RwMode, IO_CHUNK_SIZE}};
+use crate::{endpoint::{AsyncExecute, Endpoint}, server::protol::{maker::{make_io_chunk_payload, make_packet, make_pure_packet}, parser::{is_magic_number_limited, parse_connect_ok_payload, parse_endpoint_type, parse_packet_type, parse_transcribe_result_payload}, EndpointType, IOChunk, Packet, RwMode, IO_CHUNK_SIZE}};
 
 #[derive(Debug, new)]
 pub struct TcpClientConfig {
@@ -92,8 +92,6 @@ impl AsyncExecute for TcpClientEndpoint {
                                         writer.write_all(&io_chunk_packet).await.unwrap();
                                         writer.flush().await.unwrap();
                                     }
-                                } else {
-                                    println!("Failed to open file");
                                 }
                             }
                         });
@@ -101,7 +99,7 @@ impl AsyncExecute for TcpClientEndpoint {
                         // 接收任务
                         let recv_joint = tokio::spawn(async move {
                             loop {
-                                if is_magic_number(&mut reader).await.is_ok() {
+                                if is_magic_number_limited(&mut reader, 100).await.is_ok() {
                                     if let EndpointType::Client = parse_endpoint_type(&mut reader).await {
                                         let packet_type = parse_packet_type(&mut reader).await;
                                         match Packet::from(packet_type) {
@@ -134,6 +132,8 @@ impl AsyncExecute for TcpClientEndpoint {
                                             _ => {},
                                         }
                                     }
+                                } else {
+                                    break;
                                 }
                             }
                         });

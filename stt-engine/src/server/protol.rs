@@ -36,13 +36,14 @@ impl From<u8> for EndpointType {
 pub enum Packet {
     Register = 0,
     RegOk = 1,
-    Alive = 2,
+    Status = 2,
     Ack = 3,
     Connect = 4,
     ConnOk = 5,
     ConnRejected = 6,
     Data = 7,
     Result = 8,
+    Alive = 9,
     Unknown = 255,
 }
 
@@ -51,13 +52,14 @@ impl From<u8> for Packet {
         match value {
             0 => Packet::Register,
             1 => Packet::RegOk,
-            2 => Packet::Alive,
+            2 => Packet::Status,
             3 => Packet::Ack,
             4 => Packet::Connect,
             5 => Packet::ConnOk,
             6 => Packet::ConnRejected,
             7 => Packet::Data,
             8 => Packet::Result,
+            9 => Packet::Alive,
             _ => Packet::Unknown,
         }
     }
@@ -233,6 +235,13 @@ pub mod parser {
 
     use super::{Ack, ClientId, EndpointType, IOChunk, Packet, Register, SerialNo, TranscribeResult, IO_CHUNK_SIZE, MAGCI_NUMBER};
 
+    pub async fn is_magic_number_limited(reader: &mut OwnedReadHalf, limit: u64) -> SttResult<Error> {
+        tokio::select! {
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(limit)) => Err(Error::new(ErrorKind::TimedOut, "Timed out")),
+            result = is_magic_number(reader) => result,
+        }
+    }
+
     pub async fn is_magic_number(reader: &mut OwnedReadHalf) -> SttResult<Error> {
         match reader.read_u16().await {
             Ok(magic_number) => {
@@ -310,13 +319,13 @@ pub mod parser {
         }
     }
 
-    // WORKER ALIVE PACKET PAYLOAD
+    // WORKER STATUS PACKET PAYLOAD
     // |----------------------------------|
     // |   serial_no                      |
     // |----------------------------------|
     // |   6 bytes                        |
     // |----------------------------------|
-    pub async fn parse_alive_payload(reader: &mut OwnedReadHalf) -> Option<SerialNo> {
+    pub async fn parse_status_payload(reader: &mut OwnedReadHalf) -> Option<SerialNo> {
         let mut payload = [0u8; 6];
         if let Ok(_) = reader.read_exact(&mut payload).await {
             Some(payload)
