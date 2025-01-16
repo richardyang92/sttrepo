@@ -9,6 +9,7 @@ use crate::{endpoint::{AsyncExecute, Endpoint}, server::protol::{maker::{make_io
 pub struct TcpClientConfig {
     ip: String,
     port: u16,
+    file: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -22,6 +23,7 @@ pub enum TcpClientState {
 pub struct TcpClientEndpoint {
     ip: String,
     port: u16,
+    file: String,
 }
 
 impl Endpoint for TcpClientEndpoint {
@@ -34,6 +36,7 @@ impl Endpoint for TcpClientEndpoint {
             Some(TcpClientEndpoint {
                 ip: config.ip,
                 port: config.port,
+                file: config.file,
             })
         }
     }
@@ -64,6 +67,7 @@ impl AsyncExecute for TcpClientEndpoint {
                         writer.write_all(&packet).await.unwrap();
                         writer.flush().await.unwrap();
 
+                        let wav_file = self.file.clone();
                         // 发送任务
                         let send_joint = tokio::spawn(async move {
                             let mut interval = tokio::time::interval(Duration::from_secs(2));
@@ -77,7 +81,6 @@ impl AsyncExecute for TcpClientEndpoint {
                             println!("Sending data...");
                             let status = status1.lock().await;
                             if let TcpClientState::Connected = *status {
-                                let wav_file = "./data/segment/split_part_1.wav";
                                 if let Ok(mut file) = File::open(wav_file) {
                                     let mut data = Vec::new();
                                     file.read_to_end(&mut data).unwrap();
@@ -99,7 +102,7 @@ impl AsyncExecute for TcpClientEndpoint {
                         // 接收任务
                         let recv_joint = tokio::spawn(async move {
                             loop {
-                                if is_magic_number_limited(&mut reader, 100).await.is_ok() {
+                                if is_magic_number_limited(&mut reader, 1000).await.is_ok() {
                                     if let EndpointType::Client = parse_endpoint_type(&mut reader).await {
                                         let packet_type = parse_packet_type(&mut reader).await;
                                         match Packet::from(packet_type) {

@@ -132,6 +132,7 @@ impl AsyncExecute for TcpWorkerEndpoint {
                                             break;
                                         },
                                         ErrorKind::TimedOut => {
+                                            println!("Timed out");
                                             avaibale.store(true, std::sync::atomic::Ordering::Relaxed);
                                         }
                                         _ => {},

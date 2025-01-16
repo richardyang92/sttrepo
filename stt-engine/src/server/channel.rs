@@ -72,8 +72,10 @@ impl Channel for WorkerChannel {
                             WorkerChannelMessage::RegisterOk(serial_no) => {
                                 let reg_ok_packet = make_packet(EndpointType::Handler, Packet::RegOk, &serial_no);
                                 if let Some(ref mut writer) = owned_writer {
-                                    writer.write_all(&reg_ok_packet).await.unwrap();
-                                    writer.flush().await.unwrap();
+                                    match writer.write_all(&reg_ok_packet).await {
+                                        Ok(_) => writer.flush().await.unwrap(),
+                                        Err(e) => println!("register failed with serial_no: {:?} because of error: {}", serial_no, e),
+                                    }
                                 }
                             },
                             WorkerChannelMessage::ConnOk(client_id, writer) => {
@@ -129,10 +131,13 @@ impl Channel for WorkerChannel {
                             },
                             WorkerChannelMessage::ClientData(io_chunk) => {
                                 if let Some(ref mut writer) = &mut owned_writer {
+                                    let client_id = io_chunk.get_client_id();
                                     let io_chunk_payload = make_io_chunk_payload(&io_chunk);
                                     let io_chunk_packet = make_packet(EndpointType::Client, Packet::Data, &io_chunk_payload);
-                                    writer.write_all(&io_chunk_packet).await.unwrap();
-                                    writer.flush().await.unwrap();
+                                    match writer.write_all(&io_chunk_packet).await {
+                                        Ok(_) => writer.flush().await.unwrap(),
+                                        Err(e) => println!("send audio data with ClientId: {} because of error: {}", client_id, e),
+                                    }
                                 }
                             },
                             WorkerChannelMessage::ServerData(io_chunk) => {
@@ -144,8 +149,10 @@ impl Channel for WorkerChannel {
                                     let transcribe_result = TranscribeResult::new(length, *data);
                                     let transcribe_result_payload = make_transcribe_result_payload(&transcribe_result);
                                     let transcribe_result_packet = make_packet(EndpointType::Client, Packet::Result, &transcribe_result_payload);
-                                    writer.write_all(&transcribe_result_packet).await.unwrap();
-                                    writer.flush().await.unwrap();
+                                    match writer.write_all(&transcribe_result_packet).await {
+                                        Ok(_) => writer.flush().await.unwrap(),
+                                        Err(e) => println!("send transcribe result with ClientId: {} because of error: {}", client_id, e),
+                                    }
                                 }
                             },
                             WorkerChannelMessage::Detach => {
