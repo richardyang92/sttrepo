@@ -46,7 +46,9 @@ impl WorkerChannel {
                 Err(e) => {
                     println!("send packet result with ClientId: {} failed, because of error: {}", client_id, e);
                     invalided_client_id = Some(client_id);
-                    writer.shutdown().await.unwrap();
+                    if let Err(e) = writer.shutdown().await {
+                        println!("shutdown client stream with ClientId: {} failed, because of error: {}", client_id, e);
+                    }
                 },
             }
             if let Some(client_id) = invalided_client_id {

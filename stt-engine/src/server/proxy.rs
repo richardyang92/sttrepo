@@ -56,9 +56,9 @@ impl AsyncExecute for TcpListenerEndpoint {
                                             },
                                             EndpointType::Client => {
                                                 if let Packet::Connect = Packet::from(parse_packet_type(&mut reader).await) {
-                                                    println!("Received connect packet from {}>>", addr);
                                                     let workers = workers.read().await;
                                                     if lock.lock().is_ok() {
+                                                        println!("Received connect packet from {}>>", addr);
                                                         if let Some(worker) = workers.iter().find(|w| w.is_available()) {
                                                             let serial_no = worker.get_serial_no();
                                                             println!("Received connect packet from {}, attaching to worker {:?}", addr, serial_no);

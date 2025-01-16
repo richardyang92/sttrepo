@@ -125,8 +125,11 @@ impl AsyncExecute for TcpWorkerEndpoint {
                                                                         let io_chunk = IOChunk::new(RwMode::Server, serial_no, client_id, length as u16, data);
                                                                         let transfer = make_io_chunk_payload(&io_chunk);
                                                                         let transfer_packet = make_packet(EndpointType::Handler, Packet::Data, &transfer);
-                                                                        writer.write_all(&transfer_packet).await.unwrap();
-                                                                        writer.flush().await.unwrap();
+                                                                        if let Err(e) = writer.write_all(&transfer_packet).await {
+                                                                            println!("Error writing transfer packet: {}", e)
+                                                                        } else {
+                                                                            writer.flush().await.unwrap();
+                                                                        }
                                                                     }
                                                                 },
                                                                 Err(_) => {},
@@ -148,6 +151,7 @@ impl AsyncExecute for TcpWorkerEndpoint {
                                             break;
                                         },
                                         ErrorKind::TimedOut => {
+                                            println!("Timed out for {:?}", serial_no);
                                             if !avaibale.load(std::sync::atomic::Ordering::Relaxed) {
                                                 avaibale.store(true, std::sync::atomic::Ordering::Relaxed);
                                                 Self::send_alive_packet(&sherpa, &mut writer, serial_no, true).await;
