@@ -40,20 +40,22 @@ impl WorkerChannel {
     async fn send_client_packet(tcp_stream_map: DashMap<ClientId, Arc<Mutex<OwnedWriteHalf>>>, packet: Vec<u8>, client_id: ClientId) -> () {
         if let Some(writer) = tcp_stream_map.get(&client_id) {
             let mut writer = (*writer).lock().await;
-            let mut invalided_client_id: Option<ClientId> = None;
+            // let mut invalided_client_id: Option<ClientId> = None;
             match writer.write_all(&packet).await {
                 Ok(_) => writer.flush().await.unwrap(),
                 Err(e) => {
                     println!("send packet result with ClientId: {} failed, because of error: {}", client_id, e);
-                    invalided_client_id = Some(client_id);
+                    // invalided_client_id = Some(client_id);
                     if let Err(e) = writer.shutdown().await {
                         println!("shutdown client stream with ClientId: {} failed, because of error: {}", client_id, e);
                     }
                 },
             }
-            if let Some(client_id) = invalided_client_id {
-                tcp_stream_map.remove(&client_id);
-            }
+            // if let Some(client_id) = invalided_client_id {
+            //     if tcp_stream_map.contains_key(&client_id) {
+            //         tcp_stream_map.remove(&client_id);
+            //     }
+            // }
         }
     }
 }
@@ -143,7 +145,9 @@ impl Channel for WorkerChannel {
                                 }
                                 // 清理无效连接
                                 for client_id in unused_client_ids {
-                                    tcp_stream_map.remove(&client_id);
+                                    if tcp_stream_map.contains_key(&client_id) {
+                                        tcp_stream_map.remove(&client_id);
+                                    }
                                 }
 
                                 // 确定Worker stream是否已关闭

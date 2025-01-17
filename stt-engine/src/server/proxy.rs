@@ -47,7 +47,7 @@ impl AsyncExecute for TcpListenerEndpoint {
                                                         let serial_no = make_serial_no(ip, port);
     
                                                         let mut channel = WorkerChannel::new(serial_no);
-                                                        channel.open(20).await;
+                                                        channel.open(100).await;
                                                         channel.send(WorkerChannelMessage::Attach(writer)).await;
                                                         channel.send(WorkerChannelMessage::RegisterOk(serial_no)).await;
                                                         workers.write().await.push(channel);
@@ -56,8 +56,8 @@ impl AsyncExecute for TcpListenerEndpoint {
                                             },
                                             EndpointType::Client => {
                                                 if let Packet::Connect = Packet::from(parse_packet_type(&mut reader).await) {
-                                                    let workers = workers.read().await;
                                                     if lock.lock().is_ok() {
+                                                        let workers = workers.write().await;
                                                         println!("Received connect packet from {}>>", addr);
                                                         if let Some(worker) = workers.iter().find(|w| w.is_available()) {
                                                             let serial_no = worker.get_serial_no();

@@ -115,7 +115,7 @@ impl AsyncExecute for TcpClientEndpoint {
                         // 接收任务
                         let recv_joint = tokio::spawn(async move {
                             loop {
-                                if is_magic_number_limited(&mut reader, 5000).await.is_ok() {
+                                if is_magic_number_limited(&mut reader, 10000).await.is_ok() {
                                     if let EndpointType::Client = parse_endpoint_type(&mut reader).await {
                                         let packet_type = parse_packet_type(&mut reader).await;
                                         match Packet::from(packet_type) {
